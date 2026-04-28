@@ -38,7 +38,7 @@ Xray 本地化一键管理工具，基于 [RomanovCaesar/Install-Xray-Inbounds](
 - 一级总菜单（Xray 分支 / PFW 分支）
 - PFW 套件部署（广州版/香港 Lite）
 - 手动更新本脚本（菜单内）
-- 一级菜单可一键彻底清理 Xray 分支痕迹
+- 一级菜单可一键彻底清理 Xray / PFW 分支痕迹
 - 命令分层：`frank` 进入一级菜单，`xray-m` 直达 Xray 分支，`pfw` 直达 PFW
 - Xray / PFW 安装互斥保护（避免同机混装）
 - 完整卸载

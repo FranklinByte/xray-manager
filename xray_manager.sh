@@ -2138,11 +2138,12 @@ PFW
     success "香港版 pfw lite 部署完成，命令：pfw"
 }
 
-remove_pfw_suite() {
-    read -rp "确认移除 pfw/pfwd 及相关 systemd/cron 项吗？[y/N]: " confirm
+cleanup_pfw_branch_fully() {
+    read -rp "将彻底清理 PFW 分支痕迹（pfw/pfwd/规则/账本/nft/定时任务），继续吗？[y/N]: " confirm
     [[ ! $confirm =~ ^[yY]$ ]] && { info "已取消"; return; }
 
     rm -f /usr/local/bin/pfw /usr/local/bin/pfwd /usr/local/bin/pfwd-acct
+    rm -rf /etc/pfwd
     rm -f /etc/nftables.d/pfwd.nft /etc/nftables.d/pfwd_stat.nft
 
     nft delete table ip pfwd_nat 2>/dev/null || true
@@ -2160,7 +2161,11 @@ remove_pfw_suite() {
     crontab "$tmp_cron" 2>/dev/null || true
     rm -f "$tmp_cron"
 
-    success "pfw 套件移除完成"
+    success "PFW 分支已彻底清理完成"
+}
+
+remove_pfw_suite() {
+    cleanup_pfw_branch_fully
 }
 
 module_pfw_deploy_menu() {
@@ -2356,14 +2361,14 @@ module_pfw_branch_menu() {
         echo "-------------------------------------------------"
         echo -e "  ${GREEN}1.${PLAIN} 部署广州版 (规则+账本+定时同步)"
         echo -e "  ${GREEN}2.${PLAIN} 部署香港版 Lite (仅规则管理)"
-        echo -e "  ${RED}3.${PLAIN} 移除 PFW 套件"
+        echo -e "  ${RED}3.${PLAIN} 一键彻底清理 PFW 分支"
         echo -e "  ${CYAN}0.${PLAIN} 返回主菜单"
         echo -e "${CYAN}=================================================${PLAIN}"
         read -rp "请输入选项 [0-3]: " c
         case "$c" in
             1) deploy_pfw_gz; pause_return ;;
             2) deploy_pfw_hk; pause_return ;;
-            3) remove_pfw_suite; pause_return ;;
+            3) cleanup_pfw_branch_fully; pause_return ;;
             0) return ;;
             *) error "无效输入"; sleep 1 ;;
         esac
@@ -2382,6 +2387,7 @@ show_main_menu() {
     echo -e "  ${GREEN}2.${PLAIN} 进入 PFW 分支"
     echo -e "  ${YELLOW}3.${PLAIN} 安装/修复 frank 一级命令"
     echo -e "  ${RED}4.${PLAIN} 一键彻底清理 Xray 分支"
+    echo -e "  ${RED}5.${PLAIN} 一键彻底清理 PFW 分支"
     echo -e "  ${CYAN}0.${PLAIN} 退出脚本"
     echo -e "${CYAN}=================================================${PLAIN}"
 }
@@ -2399,12 +2405,13 @@ main() {
 
     while true; do
         show_main_menu
-        read -rp "请输入选项 [0-4]: " top_choice
+        read -rp "请输入选项 [0-5]: " top_choice
         case "$top_choice" in
             1) module_xray_branch_menu ;;
             2) module_pfw_branch_menu ;;
             3) install_frank_manager_command; pause_return ;;
             4) cleanup_xray_branch_fully; pause_return ;;
+            5) cleanup_pfw_branch_fully; pause_return ;;
             0) echo -e "${GREEN}再见！${PLAIN}"; exit 0 ;;
             *) error "无效输入"; sleep 1 ;;
         esac
