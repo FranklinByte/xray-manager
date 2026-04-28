@@ -20,6 +20,7 @@ readonly GEO_DIR="/usr/local/bin"
 readonly GEO_SHARE_DIR="/usr/local/share/xray"
 readonly ADDRESS_FILE="/root/inbound_address.txt"
 readonly NETWORK_TUNING_CONF="/etc/sysctl.d/99-xray-network-tuning.conf"
+readonly SCRIPT_UPDATE_URL="https://raw.githubusercontent.com/FranklinByte/xray-manager/main/xray_manager.sh"
 
 # --- 全局变量 ---
 OS_ID=""
@@ -1480,6 +1481,46 @@ module_view_log() {
     trap - SIGINT
 }
 
+module_update_manager_script() {
+    echo "================ 手动更新管理脚本 ================"
+    echo "更新源: $SCRIPT_UPDATE_URL"
+    read -rp "确认从该地址更新当前脚本吗？[y/N]: " confirm
+    [[ ! $confirm =~ ^[yY]$ ]] && { info "已取消更新"; return; }
+
+    local self_path tmp backup
+    self_path="$(readlink -f "$0" 2>/dev/null || realpath "$0" 2>/dev/null || echo "$0")"
+    tmp="$(mktemp)"
+
+    info "正在下载新版本..."
+    if ! curl -fsSL "$SCRIPT_UPDATE_URL" -o "$tmp"; then
+        rm -f "$tmp"
+        error "下载失败，请检查网络或仓库地址。"
+        return 1
+    fi
+
+    if ! bash -n "$tmp"; then
+        rm -f "$tmp"
+        error "下载文件语法校验失败，已中止更新。"
+        return 1
+    fi
+
+    chmod +x "$tmp"
+    if [[ -f "$self_path" ]]; then
+        backup="${self_path}.bak.$(date +%Y%m%d%H%M%S)"
+        cp "$self_path" "$backup"
+        info "已备份当前脚本: $backup"
+    fi
+
+    if mv "$tmp" "$self_path"; then
+        success "更新成功：$self_path"
+        info "请重新运行脚本以加载新版本。"
+    else
+        rm -f "$tmp"
+        error "写入失败：$self_path"
+        return 1
+    fi
+}
+
 # ============================================================
 # 第十三部分：网络优化 (FQ / BBR)
 # ============================================================
@@ -1588,9 +1629,10 @@ show_main_menu() {
     echo -e "  ${MAGENTA}8.${PLAIN} 网络优化 (开启 FQ / BBR)"
     echo -e "  ${MAGENTA}9.${PLAIN} 重启 Xray 服务"
     echo -e "  ${MAGENTA}10.${PLAIN} 查看 Xray 日志"
+    echo -e "  ${MAGENTA}11.${PLAIN} 手动更新本脚本"
     echo -e "  ${CYAN}0.${PLAIN} 退出脚本"
     echo -e "${CYAN}=================================================${PLAIN}"
-    read -rp " 请输入选项 [0-10]: " choice
+    read -rp " 请输入选项 [0-11]: " choice
 
     case "$choice" in
         1) module_update_geo ;;
@@ -1603,6 +1645,7 @@ show_main_menu() {
         8) module_network_tuning_menu ;;
         9) restart_xray_service ;;
         10) module_view_log ;;
+        11) module_update_manager_script ;;
         0) echo -e "${GREEN}再见！${PLAIN}"; exit 0 ;;
         *) error "无效输入"; sleep 1 ;;
     esac
@@ -1615,7 +1658,7 @@ main() {
         show_main_menu
         # 子菜单模块自己处理 pause，主菜单的单次操作需要 pause
         case "$choice" in
-            1|6|9|10) pause_return ;;
+            1|6|9|10|11) pause_return ;;
         esac
     done
 }
