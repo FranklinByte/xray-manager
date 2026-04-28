@@ -238,6 +238,22 @@ require_pfw_branch_available() {
     return 0
 }
 
+require_xray_installed_for_functions() {
+    if ! is_xray_artifacts_present; then
+        error "Xray 分支未安装。请先主动安装/修复 xray-m 或安装 Xray 后再进入功能菜单。"
+        return 1
+    fi
+    return 0
+}
+
+require_pfw_installed_for_functions() {
+    if ! is_pfw_artifacts_present; then
+        error "PFW 分支未安装。请先部署广州版或香港版后再进入功能菜单。"
+        return 1
+    fi
+    return 0
+}
+
 check_xray_status() {
     if [[ ! -f "$XRAY_BIN" ]]; then
         echo -e "  Xray 状态: ${RED}未安装${PLAIN}"
@@ -2297,12 +2313,11 @@ module_xray_operations_menu() {
         echo -e "  ${RED}6.${PLAIN} 卸载 Xray 及相关文件"
         echo -e "  ${CYAN}7.${PLAIN} 还原 Xray 配置 (Restore)"
         echo "-------------------------------------------------"
-        echo -e "  ${MAGENTA}8.${PLAIN} 网络优化 (开启 FQ / BBR)"
-        echo -e "  ${MAGENTA}9.${PLAIN} 重启 Xray 服务"
-        echo -e "  ${MAGENTA}10.${PLAIN} 查看 Xray 日志"
+        echo -e "  ${MAGENTA}8.${PLAIN} 重启 Xray 服务"
+        echo -e "  ${MAGENTA}9.${PLAIN} 查看 Xray 日志"
         echo -e "  ${CYAN}0.${PLAIN} 返回上级"
         echo -e "${CYAN}=================================================${PLAIN}"
-        read -rp " 请输入选项 [0-10]: " choice
+        read -rp " 请输入选项 [0-9]: " choice
 
         case "$choice" in
             1) module_update_geo; pause_return ;;
@@ -2312,9 +2327,8 @@ module_xray_operations_menu() {
             5) module_routing_menu ;;
             6) module_uninstall; pause_return ;;
             7) module_restore_menu ;;
-            8) module_network_tuning_menu ;;
-            9) restart_xray_service; pause_return ;;
-            10) module_view_log; pause_return ;;
+            8) restart_xray_service; pause_return ;;
+            9) module_view_log; pause_return ;;
             0) return ;;
             *) error "无效输入"; sleep 1 ;;
         esac
@@ -2341,6 +2355,7 @@ module_xray_branch_menu() {
             1) install_xray_manager_command; pause_return ;;
             2)
                 require_xray_branch_available || { pause_return; continue; }
+                require_xray_installed_for_functions || { pause_return; continue; }
                 module_xray_operations_menu
                 ;;
             3) module_update_manager_script; pause_return ;;
@@ -2349,6 +2364,15 @@ module_xray_branch_menu() {
             *) error "无效输入"; sleep 1 ;;
         esac
     done
+}
+
+enter_pfw_function_menu() {
+    require_pfw_installed_for_functions || return 1
+    if [[ ! -x /usr/local/bin/pfw ]]; then
+        error "PFW 命令不存在或不可执行，请先重新部署 PFW 分支。"
+        return 1
+    fi
+    /usr/local/bin/pfw
 }
 
 module_pfw_branch_menu() {
@@ -2361,14 +2385,16 @@ module_pfw_branch_menu() {
         echo "-------------------------------------------------"
         echo -e "  ${GREEN}1.${PLAIN} 部署广州版 (规则+账本+定时同步)"
         echo -e "  ${GREEN}2.${PLAIN} 部署香港版 Lite (仅规则管理)"
-        echo -e "  ${RED}3.${PLAIN} 一键彻底清理 PFW 分支"
+        echo -e "  ${GREEN}3.${PLAIN} 进入 PFW 功能菜单"
+        echo -e "  ${RED}4.${PLAIN} 一键彻底清理 PFW 分支"
         echo -e "  ${CYAN}0.${PLAIN} 返回主菜单"
         echo -e "${CYAN}=================================================${PLAIN}"
-        read -rp "请输入选项 [0-3]: " c
+        read -rp "请输入选项 [0-4]: " c
         case "$c" in
             1) deploy_pfw_gz; pause_return ;;
             2) deploy_pfw_hk; pause_return ;;
-            3) cleanup_pfw_branch_fully; pause_return ;;
+            3) enter_pfw_function_menu; pause_return ;;
+            4) cleanup_pfw_branch_fully; pause_return ;;
             0) return ;;
             *) error "无效输入"; sleep 1 ;;
         esac
@@ -2385,9 +2411,10 @@ show_main_menu() {
     echo "-------------------------------------------------"
     echo -e "  ${GREEN}1.${PLAIN} 进入 Xray 分支"
     echo -e "  ${GREEN}2.${PLAIN} 进入 PFW 分支"
-    echo -e "  ${YELLOW}3.${PLAIN} 安装/修复 frank 一级命令"
-    echo -e "  ${RED}4.${PLAIN} 一键彻底清理 Xray 分支"
-    echo -e "  ${RED}5.${PLAIN} 一键彻底清理 PFW 分支"
+    echo -e "  ${MAGENTA}3.${PLAIN} 网络优化 (开启 FQ / BBR)"
+    echo -e "  ${YELLOW}4.${PLAIN} 安装/修复 frank 一级命令"
+    echo -e "  ${RED}5.${PLAIN} 一键彻底清理 Xray 分支"
+    echo -e "  ${RED}6.${PLAIN} 一键彻底清理 PFW 分支"
     echo -e "  ${CYAN}0.${PLAIN} 退出脚本"
     echo -e "${CYAN}=================================================${PLAIN}"
 }
@@ -2405,13 +2432,14 @@ main() {
 
     while true; do
         show_main_menu
-        read -rp "请输入选项 [0-5]: " top_choice
+        read -rp "请输入选项 [0-6]: " top_choice
         case "$top_choice" in
             1) module_xray_branch_menu ;;
             2) module_pfw_branch_menu ;;
-            3) install_frank_manager_command; pause_return ;;
-            4) cleanup_xray_branch_fully; pause_return ;;
-            5) cleanup_pfw_branch_fully; pause_return ;;
+            3) module_network_tuning_menu ;;
+            4) install_frank_manager_command; pause_return ;;
+            5) cleanup_xray_branch_fully; pause_return ;;
+            6) cleanup_pfw_branch_fully; pause_return ;;
             0) echo -e "${GREEN}再见！${PLAIN}"; exit 0 ;;
             *) error "无效输入"; sleep 1 ;;
         esac

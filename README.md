@@ -34,13 +34,14 @@ Xray 本地化一键管理工具，基于 [RomanovCaesar/Install-Xray-Inbounds](
 - GeoIP / GeoSite 数据更新（支持 crontab 定时）
 - 自定义连接地址（NAT / DDNS 场景）
 - 配置还原（URL 下载 / 手动编辑 / 测试）
-- 网络优化（开启 FQ / BBR）
+- 一级菜单直接提供网络优化（开启 FQ / BBR）
 - 一级总菜单（Xray 分支 / PFW 分支）
 - PFW 套件部署（广州版/香港 Lite）
 - 手动更新本脚本（菜单内）
 - 一级菜单可一键彻底清理 Xray / PFW 分支痕迹
 - 命令分层：`frank` 进入一级菜单，`xray-m` 直达 Xray 分支，`pfw` 直达 PFW
 - Xray / PFW 安装互斥保护（避免同机混装）
+- 未安装分支时禁止进入对应实际功能菜单，避免生成相关文件
 - 完整卸载
 - 适配 Debian / Ubuntu / Alpine / CentOS 系（systemd / OpenRC）
 
@@ -88,7 +89,7 @@ sudo bash -c 'curl -fsSL https://raw.githubusercontent.com/FranklinByte/xray-man
 - `xray-m`：直达 Xray 分支（需要在 Xray 分支内主动安装）
 - `pfw`：直达 PFW（部署广州版或香港版后自动提供）
 
-> 如果你的机器需要严格避免 Xray 痕迹，请只使用 `frank` 进入一级菜单后选择 PFW 分支；不要进入 Xray 分支安装/修复 `xray-m`。
+> 进入 Xray / PFW 分支只显示分支菜单，不会自动下载或创建该分支文件；只有主动选择安装/部署才会写入对应分支内容。未安装分支时，实际功能菜单会拒绝进入。
 
 ## 发行版兼容性
 
