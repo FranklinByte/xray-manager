@@ -34,13 +34,14 @@ Xray 本地化一键管理工具，基于 [RomanovCaesar/Install-Xray-Inbounds](
 - GeoIP / GeoSite 数据更新（支持 crontab 定时）
 - 自定义连接地址（NAT / DDNS 场景）
 - 配置还原（URL 下载 / 手动编辑 / 测试）
+- 网络优化（开启 FQ / BBR）
 - 完整卸载
 - 适配 Debian / Ubuntu / Alpine (systemd / OpenRC)
 
 ## 安装使用
 
 ```bash
-curl -Lo xray_manager.sh https://raw.githubusercontent.com/<你的用户名>/xray-manager/main/xray_manager.sh
+curl -Lo xray_manager.sh https://raw.githubusercontent.com/FranklinByte/xray-manager/main/xray_manager.sh
 chmod +x xray_manager.sh
 sudo bash xray_manager.sh
 ```
@@ -48,8 +49,15 @@ sudo bash xray_manager.sh
 或直接：
 
 ```bash
-sudo bash -c "$(curl -fsSL https://raw.githubusercontent.com/<你的用户名>/xray-manager/main/xray_manager.sh)"
+sudo bash -c "$(curl -fsSL https://raw.githubusercontent.com/FranklinByte/xray-manager/main/xray_manager.sh)"
 ```
+
+## 发行版兼容性
+
+- Debian 11/12：✅ 支持
+- Ubuntu 20.04/22.04/24.04：✅ 支持
+- Alpine 3.x：✅ 支持
+- CentOS / RHEL / Rocky / AlmaLinux / Fedora：❌ 当前未适配（脚本暂未实现 yum/dnf 安装分支）
 
 ## 系统要求
 

@@ -19,6 +19,7 @@ readonly XRAY_BIN="/usr/local/bin/xray"
 readonly GEO_DIR="/usr/local/bin"
 readonly GEO_SHARE_DIR="/usr/local/share/xray"
 readonly ADDRESS_FILE="/root/inbound_address.txt"
+readonly NETWORK_TUNING_CONF="/etc/sysctl.d/99-xray-network-tuning.conf"
 
 # --- 全局变量 ---
 OS_ID=""
@@ -1480,7 +1481,93 @@ module_view_log() {
 }
 
 # ============================================================
-# 第十三部分：主菜单
+# 第十三部分：网络优化 (FQ / BBR)
+# ============================================================
+
+set_sysctl_key() {
+    local key="$1" value="$2"
+    touch "$NETWORK_TUNING_CONF"
+    if grep -q "^${key}=" "$NETWORK_TUNING_CONF"; then
+        sed -i "s|^${key}=.*|${key}=${value}|" "$NETWORK_TUNING_CONF"
+    else
+        echo "${key}=${value}" >> "$NETWORK_TUNING_CONF"
+    fi
+    sysctl -w "${key}=${value}" >/dev/null 2>&1 || true
+}
+
+show_network_tuning_status() {
+    local qdisc cc avail_cc
+    qdisc=$(sysctl -n net.core.default_qdisc 2>/dev/null || echo "unknown")
+    cc=$(sysctl -n net.ipv4.tcp_congestion_control 2>/dev/null || echo "unknown")
+    avail_cc=$(sysctl -n net.ipv4.tcp_available_congestion_control 2>/dev/null || echo "unknown")
+
+    echo "================ 当前网络优化状态 ================"
+    echo "default_qdisc: $qdisc"
+    echo "tcp_congestion_control: $cc"
+    echo "available_congestion_control: $avail_cc"
+    echo "配置文件: $NETWORK_TUNING_CONF"
+}
+
+enable_fq() {
+    info "正在启用 FQ 队列调度..."
+    set_sysctl_key "net.core.default_qdisc" "fq"
+    if [[ "$(sysctl -n net.core.default_qdisc 2>/dev/null || true)" == "fq" ]]; then
+        success "FQ 已启用 (net.core.default_qdisc=fq)"
+    else
+        error "FQ 启用失败，请检查内核支持情况。"
+        return 1
+    fi
+}
+
+enable_bbr() {
+    info "正在启用 BBR 拥塞控制..."
+
+    # 先确保可用拥塞控制列表里有 bbr
+    if ! sysctl -n net.ipv4.tcp_available_congestion_control 2>/dev/null | grep -qw bbr; then
+        modprobe tcp_bbr 2>/dev/null || true
+    fi
+    if ! sysctl -n net.ipv4.tcp_available_congestion_control 2>/dev/null | grep -qw bbr; then
+        error "当前内核不支持 BBR（available_congestion_control 中未发现 bbr）。"
+        return 1
+    fi
+
+    # BBR 推荐配合 fq
+    set_sysctl_key "net.core.default_qdisc" "fq"
+    set_sysctl_key "net.ipv4.tcp_congestion_control" "bbr"
+
+    if [[ "$(sysctl -n net.ipv4.tcp_congestion_control 2>/dev/null || true)" == "bbr" ]]; then
+        success "BBR 已启用，并已设置 FQ。"
+    else
+        error "BBR 启用失败，请检查内核与权限。"
+        return 1
+    fi
+}
+
+module_network_tuning_menu() {
+    while true; do
+        clear
+        echo "================================================="
+        echo "             网络优化 (FQ / BBR)"
+        echo "================================================="
+        echo "  1. 仅启用 FQ (default_qdisc=fq)"
+        echo "  2. 启用 BBR + FQ (推荐)"
+        echo "  3. 查看当前状态"
+        echo "  0. 返回主菜单"
+        echo "================================================="
+        read -rp "请输入选项 [0-3]: " num
+        case "$num" in
+            1) enable_fq ;;
+            2) enable_bbr ;;
+            3) show_network_tuning_status ;;
+            0) return ;;
+            *) error "无效输入" ;;
+        esac
+        pause_return
+    done
+}
+
+# ============================================================
+# 第十四部分：主菜单
 # ============================================================
 
 show_main_menu() {
@@ -1498,11 +1585,12 @@ show_main_menu() {
     echo -e "  ${RED}6.${PLAIN} 卸载 Xray 及相关文件"
     echo -e "  ${CYAN}7.${PLAIN} 还原 Xray 配置 (Restore)"
     echo "-------------------------------------------------"
-    echo -e "  ${MAGENTA}8.${PLAIN} 重启 Xray 服务"
-    echo -e "  ${MAGENTA}9.${PLAIN} 查看 Xray 日志"
+    echo -e "  ${MAGENTA}8.${PLAIN} 网络优化 (开启 FQ / BBR)"
+    echo -e "  ${MAGENTA}9.${PLAIN} 重启 Xray 服务"
+    echo -e "  ${MAGENTA}10.${PLAIN} 查看 Xray 日志"
     echo -e "  ${CYAN}0.${PLAIN} 退出脚本"
     echo -e "${CYAN}=================================================${PLAIN}"
-    read -rp " 请输入选项 [0-9]: " choice
+    read -rp " 请输入选项 [0-10]: " choice
 
     case "$choice" in
         1) module_update_geo ;;
@@ -1512,8 +1600,9 @@ show_main_menu() {
         5) module_routing_menu ;;
         6) module_uninstall ;;
         7) module_restore_menu ;;
-        8) restart_xray_service ;;
-        9) module_view_log ;;
+        8) module_network_tuning_menu ;;
+        9) restart_xray_service ;;
+        10) module_view_log ;;
         0) echo -e "${GREEN}再见！${PLAIN}"; exit 0 ;;
         *) error "无效输入"; sleep 1 ;;
     esac
@@ -1526,7 +1615,7 @@ main() {
         show_main_menu
         # 子菜单模块自己处理 pause，主菜单的单次操作需要 pause
         case "$choice" in
-            1|6|8|9) pause_return ;;
+            1|6|9|10) pause_return ;;
         esac
     done
 }
