@@ -1637,6 +1637,46 @@ cleanup_manager_environment() {
     success "环境清理完成"
 }
 
+cleanup_xray_branch_fully() {
+    read -rp "将彻底清理 Xray 分支痕迹（xray/xray-m/配置/日志/定时任务），继续吗？[y/N]: " confirm
+    [[ ! $confirm =~ ^[yY]$ ]] && { info "已取消"; return; }
+
+    if [[ "$INIT_SYSTEM" == "systemd" ]]; then
+        local units=()
+        while IFS= read -r u; do
+            [[ -n "$u" ]] && units+=("$u")
+        done < <(systemctl list-unit-files --type=service --no-pager --no-legend 2>/dev/null | awk '{print $1}' | grep -iE 'xray' || true)
+        for u in "${units[@]}"; do
+            systemctl stop "$u" --no-block 2>/dev/null || true
+            systemctl disable "$u" 2>/dev/null || true
+        done
+        rm -f /etc/systemd/system/*xray*.service /lib/systemd/system/*xray*.service
+        systemctl daemon-reload || true
+    elif command -v rc-service >/dev/null 2>&1; then
+        rc-service xray stop 2>/dev/null || true
+        rc-update del xray default 2>/dev/null || true
+        rm -f /etc/init.d/xray /run/xray.pid
+    fi
+
+    rm -f "$XRAY_BIN" /usr/local/sbin/xray-m /usr/local/bin/xray-m
+    rm -rf /usr/local/etc/xray /usr/local/share/xray /var/log/xray
+    rm -f "$ADDRESS_FILE" /root/xray_*.txt /root/xray-config-backup-*.tar.gz
+
+    rm -f /root/update_geo_local.sh /var/log/update_geo.log
+    local tmp_cron
+    tmp_cron="$(mktemp)"
+    crontab -l 2>/dev/null | grep -v "update_geo_local.sh" > "$tmp_cron" || true
+    crontab "$tmp_cron" 2>/dev/null || true
+    rm -f "$tmp_cron"
+
+    if [[ -f "$NETWORK_TUNING_CONF" ]]; then
+        rm -f "$NETWORK_TUNING_CONF"
+        sysctl --system >/dev/null 2>&1 || true
+    fi
+
+    success "Xray 分支已彻底清理完成"
+}
+
 remove_current_script_file() {
     local self_path
     self_path="$(readlink -f "$0" 2>/dev/null || realpath "$0" 2>/dev/null || echo "$0")"
@@ -2276,11 +2316,10 @@ module_xray_branch_menu() {
         echo -e "  ${GREEN}1.${PLAIN} 安装/修复 xray-m 命令"
         echo -e "  ${GREEN}2.${PLAIN} 进入 Xray 功能菜单"
         echo -e "  ${YELLOW}3.${PLAIN} 手动更新当前脚本"
-        echo -e "  ${RED}4.${PLAIN} 删除 xray-m 命令"
-        echo -e "  ${RED}5.${PLAIN} 清理 Xray 环境痕迹"
+        echo -e "  ${RED}4.${PLAIN} 一键彻底清理 Xray 分支"
         echo -e "  ${CYAN}0.${PLAIN} 返回主菜单"
         echo -e "${CYAN}=================================================${PLAIN}"
-        read -rp "请输入选项 [0-5]: " c
+        read -rp "请输入选项 [0-4]: " c
         case "$c" in
             1) install_xray_manager_command; pause_return ;;
             2)
@@ -2288,8 +2327,7 @@ module_xray_branch_menu() {
                 module_xray_operations_menu
                 ;;
             3) module_update_manager_script; pause_return ;;
-            4) remove_xray_manager_command; pause_return ;;
-            5) cleanup_manager_environment; pause_return ;;
+            4) cleanup_xray_branch_fully; pause_return ;;
             0) return ;;
             *) error "无效输入"; sleep 1 ;;
         esac
@@ -2330,6 +2368,7 @@ show_main_menu() {
     echo "-------------------------------------------------"
     echo -e "  ${GREEN}1.${PLAIN} 进入 Xray 分支"
     echo -e "  ${GREEN}2.${PLAIN} 进入 PFW 分支"
+    echo -e "  ${RED}3.${PLAIN} 一键彻底清理 Xray 分支"
     echo -e "  ${CYAN}0.${PLAIN} 退出脚本"
     echo -e "${CYAN}=================================================${PLAIN}"
 }
@@ -2339,10 +2378,11 @@ main() {
     pre_check
     while true; do
         show_main_menu
-        read -rp "请输入选项 [0-2]: " top_choice
+        read -rp "请输入选项 [0-3]: " top_choice
         case "$top_choice" in
             1) module_xray_branch_menu ;;
             2) module_pfw_branch_menu ;;
+            3) cleanup_xray_branch_fully; pause_return ;;
             0) echo -e "${GREEN}再见！${PLAIN}"; exit 0 ;;
             *) error "无效输入"; sleep 1 ;;
         esac

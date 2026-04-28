@@ -38,7 +38,8 @@ Xray 本地化一键管理工具，基于 [RomanovCaesar/Install-Xray-Inbounds](
 - 一级总菜单（Xray 分支 / PFW 分支）
 - PFW 套件部署（广州版/香港 Lite）
 - 手动更新本脚本（菜单内）
-- 管理器命令与环境清理（安装/删除 xray-m、清理脚本环境改动）
+- 一级菜单可一键彻底清理 Xray 分支痕迹
+- 管理器命令管理（安装/修复 xray-m）
 - Xray / PFW 安装互斥保护（避免同机混装）
 - 完整卸载
 - 适配 Debian / Ubuntu / Alpine / CentOS 系（systemd / OpenRC）
