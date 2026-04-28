@@ -1588,6 +1588,18 @@ module_update_manager_script() {
     fi
 }
 
+install_frank_manager_command() {
+    local self_path target
+    self_path="$(readlink -f "$0" 2>/dev/null || realpath "$0" 2>/dev/null || echo "$0")"
+    target="/usr/local/sbin/frank"
+    [[ ! -f "$self_path" ]] && { error "当前脚本路径无效: $self_path"; return 1; }
+
+    cp "$self_path" "$target"
+    chmod 755 "$target"
+    ln -sf "$target" /usr/local/bin/frank
+    success "一级总控命令已安装: frank"
+}
+
 install_xray_manager_command() {
     require_xray_branch_available || return 1
 
@@ -1599,7 +1611,7 @@ install_xray_manager_command() {
     cp "$self_path" "$target"
     chmod 755 "$target"
     ln -sf "$target" /usr/local/bin/xray-m
-    success "命令已安装: xray-m"
+    success "Xray 分支命令已安装: xray-m"
 }
 
 remove_xray_manager_command() {
@@ -1685,7 +1697,7 @@ remove_current_script_file() {
 
     rm -f "$self_path"
     success "当前脚本文件已删除"
-    info "如果你还需要管理器，请重新下载并安装 xray-m。"
+    info "如果你还需要管理器，请重新下载并安装 frank。"
     exit 0
 }
 
@@ -2368,7 +2380,8 @@ show_main_menu() {
     echo "-------------------------------------------------"
     echo -e "  ${GREEN}1.${PLAIN} 进入 Xray 分支"
     echo -e "  ${GREEN}2.${PLAIN} 进入 PFW 分支"
-    echo -e "  ${RED}3.${PLAIN} 一键彻底清理 Xray 分支"
+    echo -e "  ${YELLOW}3.${PLAIN} 安装/修复 frank 一级命令"
+    echo -e "  ${RED}4.${PLAIN} 一键彻底清理 Xray 分支"
     echo -e "  ${CYAN}0.${PLAIN} 退出脚本"
     echo -e "${CYAN}=================================================${PLAIN}"
 }
@@ -2376,13 +2389,22 @@ show_main_menu() {
 # --- 入口 ---
 main() {
     pre_check
+    local entry_name
+    entry_name="$(basename "$0")"
+
+    if [[ "$entry_name" == "xray-m" ]]; then
+        module_xray_branch_menu
+        exit 0
+    fi
+
     while true; do
         show_main_menu
-        read -rp "请输入选项 [0-3]: " top_choice
+        read -rp "请输入选项 [0-4]: " top_choice
         case "$top_choice" in
             1) module_xray_branch_menu ;;
             2) module_pfw_branch_menu ;;
-            3) cleanup_xray_branch_fully; pause_return ;;
+            3) install_frank_manager_command; pause_return ;;
+            4) cleanup_xray_branch_fully; pause_return ;;
             0) echo -e "${GREEN}再见！${PLAIN}"; exit 0 ;;
             *) error "无效输入"; sleep 1 ;;
         esac

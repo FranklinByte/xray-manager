@@ -39,7 +39,7 @@ Xray 本地化一键管理工具，基于 [RomanovCaesar/Install-Xray-Inbounds](
 - PFW 套件部署（广州版/香港 Lite）
 - 手动更新本脚本（菜单内）
 - 一级菜单可一键彻底清理 Xray 分支痕迹
-- 管理器命令管理（安装/修复 xray-m）
+- 命令分层：`frank` 进入一级菜单，`xray-m` 直达 Xray 分支，`pfw` 直达 PFW
 - Xray / PFW 安装互斥保护（避免同机混装）
 - 完整卸载
 - 适配 Debian / Ubuntu / Alpine / CentOS 系（systemd / OpenRC）
@@ -58,13 +58,13 @@ sudo bash xray_manager.sh
 sudo bash -c "$(curl -fsSL https://raw.githubusercontent.com/FranklinByte/xray-manager/main/xray_manager.sh)"
 ```
 
-可选安装为命令（仅在你主动进入 Xray 分支并选择安装时使用）：
+推荐安装为一级总控命令 `frank`：
 
 ```bash
-sudo bash -c 'curl -fsSL https://raw.githubusercontent.com/FranklinByte/xray-manager/main/xray_manager.sh -o /usr/local/sbin/xray-m && chmod 755 /usr/local/sbin/xray-m && /usr/local/sbin/xray-m'
+sudo bash -c 'curl -fsSL https://raw.githubusercontent.com/FranklinByte/xray-manager/main/xray_manager.sh -o /usr/local/sbin/frank && chmod 755 /usr/local/sbin/frank && ln -sf /usr/local/sbin/frank /usr/local/bin/frank && frank'
 ```
 
-> 脚本默认进入一级总菜单，只显示 Xray / PFW 两个分支状态；不主动安装 Xray。
+> `frank` 进入一级总菜单；`xray-m` 只在你进入 Xray 分支并主动安装/修复后才存在；`pfw` 由 PFW 分支部署后提供。
 
 ## 已部署旧版本如何更新
 
@@ -76,15 +76,19 @@ chmod +x xray_manager.sh
 sudo bash xray_manager.sh
 ```
 
-### 方式 2：已安装 `xray-m` 命令时
+### 方式 2：已安装 `frank` 命令时
 
 ```bash
-sudo curl -fsSL https://raw.githubusercontent.com/FranklinByte/xray-manager/main/xray_manager.sh -o /usr/local/sbin/xray-m
-sudo chmod 755 /usr/local/sbin/xray-m
-sudo xray-m
+sudo bash -c 'curl -fsSL https://raw.githubusercontent.com/FranklinByte/xray-manager/main/xray_manager.sh -o /usr/local/sbin/frank && chmod 755 /usr/local/sbin/frank && ln -sf /usr/local/sbin/frank /usr/local/bin/frank && frank'
 ```
 
-> 如果你的机器需要严格避免 Xray 痕迹，请只进入 PFW 分支操作；不要进入 Xray 分支安装/修复 `xray-m`。
+### 命令入口说明
+
+- `frank`：一级总控菜单
+- `xray-m`：直达 Xray 分支（需要在 Xray 分支内主动安装）
+- `pfw`：直达 PFW（部署广州版或香港版后自动提供）
+
+> 如果你的机器需要严格避免 Xray 痕迹，请只使用 `frank` 进入一级菜单后选择 PFW 分支；不要进入 Xray 分支安装/修复 `xray-m`。
 
 ## 发行版兼容性
 
