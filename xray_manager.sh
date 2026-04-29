@@ -222,22 +222,6 @@ pfw_branch_status_text() {
     echo -e "$status"
 }
 
-require_xray_branch_available() {
-    if is_pfw_artifacts_present; then
-        error "检测到 PFW 已安装。为避免审查风险，请先在 PFW 分支卸载后再安装/启用 Xray。"
-        return 1
-    fi
-    return 0
-}
-
-require_pfw_branch_available() {
-    if is_xray_artifacts_present; then
-        error "检测到 Xray 相关文件。为避免审查风险，请先清理 Xray 分支后再部署 PFW。"
-        return 1
-    fi
-    return 0
-}
-
 require_xray_installed_for_functions() {
     if ! is_xray_artifacts_present; then
         error "Xray 分支未安装。请先主动安装/修复 xray-m 或安装 Xray 后再进入功能菜单。"
@@ -1617,8 +1601,6 @@ install_frank_manager_command() {
 }
 
 install_xray_manager_command() {
-    require_xray_branch_available || return 1
-
     local self_path target
     self_path="$(readlink -f "$0" 2>/dev/null || realpath "$0" 2>/dev/null || echo "$0")"
     target="/usr/local/sbin/xray-m"
@@ -1743,8 +1725,6 @@ module_manager_cleanup_menu() {
 }
 
 deploy_pfw_gz() {
-    require_pfw_branch_available || return 1
-
     info "开始部署广州版 PFW（规则管理 + 账本）..."
     install_packages nftables gawk
 
@@ -2023,8 +2003,6 @@ TMR
 }
 
 deploy_pfw_hk() {
-    require_pfw_branch_available || return 1
-
     info "开始部署香港版 PFW Lite（仅规则管理）..."
     install_packages nftables
 
@@ -2354,7 +2332,6 @@ module_xray_branch_menu() {
         case "$c" in
             1) install_xray_manager_command; pause_return ;;
             2)
-                require_xray_branch_available || { pause_return; continue; }
                 require_xray_installed_for_functions || { pause_return; continue; }
                 module_xray_operations_menu
                 ;;
