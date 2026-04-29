@@ -62,7 +62,7 @@ sudo bash -c "$(curl -fsSL https://raw.githubusercontent.com/FranklinByte/xray-m
 推荐安装为一级总控命令 `frank`：
 
 ```bash
-sudo bash -c 'curl -fsSL https://raw.githubusercontent.com/FranklinByte/xray-manager/main/xray_manager.sh -o /usr/local/sbin/frank && chmod 755 /usr/local/sbin/frank && ln -sf /usr/local/sbin/frank /usr/local/bin/frank && frank'
+sudo bash -c 'curl -fsSL -H "Cache-Control: no-cache" "https://raw.githubusercontent.com/FranklinByte/xray-manager/main/xray_manager.sh?ts=$(date +%s)" -o /usr/local/sbin/frank && chmod 755 /usr/local/sbin/frank && ln -sf /usr/local/sbin/frank /usr/local/bin/frank && frank'
 ```
 
 > `frank` 进入一级总菜单；`xray-m` 只在你进入 Xray 分支并主动安装/修复后才存在；`pfw` 由 PFW 分支部署后提供。
