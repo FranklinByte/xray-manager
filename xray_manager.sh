@@ -20,6 +20,7 @@ readonly GEO_DIR="/usr/local/bin"
 readonly GEO_SHARE_DIR="/usr/local/share/xray"
 readonly ADDRESS_FILE="/root/inbound_address.txt"
 readonly NETWORK_TUNING_CONF="/etc/sysctl.d/99-xray-network-tuning.conf"
+readonly PFW_FORWARD_CONF="/etc/sysctl.d/99-pfw-forward.conf"
 readonly SCRIPT_UPDATE_URL="https://raw.githubusercontent.com/FranklinByte/xray-manager/main/xray_manager.sh"
 
 # --- 全局变量 ---
@@ -1718,6 +1719,17 @@ remove_current_script_file() {
     exit 0
 }
 
+enable_pfw_forwarding() {
+    printf 'net.ipv4.ip_forward=1\n' > "$PFW_FORWARD_CONF"
+    sysctl -w net.ipv4.ip_forward=1 >/dev/null 2>&1 || true
+    if [[ "$(sysctl -n net.ipv4.ip_forward 2>/dev/null || echo 0)" == "1" ]]; then
+        success "已开启 IPv4 转发 (net.ipv4.ip_forward=1)"
+    else
+        error "IPv4 转发开启失败，请检查 sysctl 配置。"
+        return 1
+    fi
+}
+
 module_manager_cleanup_menu() {
     while true; do
         clear
@@ -1746,6 +1758,7 @@ module_manager_cleanup_menu() {
 deploy_pfw_gz() {
     info "开始部署广州版 PFW（规则管理 + 账本）..."
     install_packages nftables gawk
+    enable_pfw_forwarding || return 1
 
     mkdir -p /etc/pfwd /etc/nftables.d
     touch /etc/pfwd/rules.tsv /etc/pfwd/usage.tsv
@@ -2024,6 +2037,7 @@ TMR
 deploy_pfw_hk() {
     info "开始部署香港版 PFW Lite（仅规则管理）..."
     install_packages nftables
+    enable_pfw_forwarding || return 1
 
     mkdir -p /etc/pfwd /etc/nftables.d
     touch /etc/pfwd/rules.tsv
@@ -2157,7 +2171,7 @@ cleanup_pfw_branch_fully() {
 
     rm -f /usr/local/bin/pfw /usr/local/bin/pfwd /usr/local/bin/pfwd-acct
     rm -rf /etc/pfwd
-    rm -f /etc/nftables.d/pfwd.nft /etc/nftables.d/pfwd_stat.nft
+    rm -f /etc/nftables.d/pfwd.nft /etc/nftables.d/pfwd_stat.nft "$PFW_FORWARD_CONF"
 
     nft delete table ip pfwd_nat 2>/dev/null || true
     nft delete table inet pfwd_stat 2>/dev/null || true
@@ -2173,6 +2187,7 @@ cleanup_pfw_branch_fully() {
     crontab -l 2>/dev/null | grep -v "pfwd-acct sync" > "$tmp_cron" || true
     crontab "$tmp_cron" 2>/dev/null || true
     rm -f "$tmp_cron"
+    sysctl --system >/dev/null 2>&1 || true
 
     success "PFW 分支已彻底清理完成"
 }
