@@ -1551,12 +1551,28 @@ module_view_log() {
 module_update_manager_script() {
     echo "================ 手动更新管理脚本 ================"
     echo "更新源: $SCRIPT_UPDATE_URL"
-    read -rp "确认从该地址更新当前脚本吗？[y/N]: " confirm
+    read -rp "确认从该地址更新已安装的管理脚本吗？[y/N]: " confirm
     [[ ! $confirm =~ ^[yY]$ ]] && { info "已取消更新"; return; }
 
-    local self_path tmp backup
+    local self_path tmp backup target stamp
+    local targets=()
     self_path="$(readlink -f "$0" 2>/dev/null || realpath "$0" 2>/dev/null || echo "$0")"
     tmp="$(mktemp)"
+    stamp="$(date +%Y%m%d%H%M%S)"
+
+    add_update_target() {
+        local p="$1" resolved
+        [[ -f "$p" ]] || return 0
+        resolved="$(readlink -f "$p" 2>/dev/null || realpath "$p" 2>/dev/null || echo "$p")"
+        for target in "${targets[@]}"; do
+            [[ "$target" == "$resolved" ]] && return 0
+        done
+        targets+=("$resolved")
+    }
+
+    add_update_target "$self_path"
+    add_update_target /usr/local/sbin/frank
+    add_update_target /usr/local/sbin/xray-m
 
     info "正在下载新版本..."
     if ! curl -fsSL "$SCRIPT_UPDATE_URL" -o "$tmp"; then
@@ -1571,21 +1587,24 @@ module_update_manager_script() {
         return 1
     fi
 
-    chmod +x "$tmp"
-    if [[ -f "$self_path" ]]; then
-        backup="${self_path}.bak.$(date +%Y%m%d%H%M%S)"
-        cp "$self_path" "$backup"
-        info "已备份当前脚本: $backup"
-    fi
+    chmod 755 "$tmp"
+    for target in "${targets[@]}"; do
+        backup="${target}.bak.${stamp}"
+        cp "$target" "$backup"
+        info "已备份: $backup"
+        if install -m 755 "$tmp" "$target"; then
+            success "已更新: $target"
+        else
+            rm -f "$tmp"
+            error "写入失败: $target"
+            return 1
+        fi
+    done
+    rm -f "$tmp"
 
-    if mv "$tmp" "$self_path"; then
-        success "更新成功：$self_path"
-        info "请重新运行脚本以加载新版本。"
-    else
-        rm -f "$tmp"
-        error "写入失败：$self_path"
-        return 1
-    fi
+    ln -sf /usr/local/sbin/frank /usr/local/bin/frank 2>/dev/null || true
+    [[ -f /usr/local/sbin/xray-m ]] && ln -sf /usr/local/sbin/xray-m /usr/local/bin/xray-m 2>/dev/null || true
+    info "请重新运行脚本以加载新版本。"
 }
 
 install_frank_manager_command() {
@@ -2390,8 +2409,9 @@ show_main_menu() {
     echo -e "  ${GREEN}2.${PLAIN} 进入 PFW 分支"
     echo -e "  ${MAGENTA}3.${PLAIN} 网络优化 (开启 FQ / BBR)"
     echo -e "  ${YELLOW}4.${PLAIN} 安装/修复 frank 一级命令"
-    echo -e "  ${RED}5.${PLAIN} 一键彻底清理 Xray 分支"
-    echo -e "  ${RED}6.${PLAIN} 一键彻底清理 PFW 分支"
+    echo -e "  ${YELLOW}5.${PLAIN} 手动更新管理脚本"
+    echo -e "  ${RED}6.${PLAIN} 一键彻底清理 Xray 分支"
+    echo -e "  ${RED}7.${PLAIN} 一键彻底清理 PFW 分支"
     echo -e "  ${CYAN}0.${PLAIN} 退出脚本"
     echo -e "${CYAN}=================================================${PLAIN}"
 }
@@ -2409,14 +2429,15 @@ main() {
 
     while true; do
         show_main_menu
-        read -rp "请输入选项 [0-6]: " top_choice
+        read -rp "请输入选项 [0-7]: " top_choice
         case "$top_choice" in
             1) module_xray_branch_menu ;;
             2) module_pfw_branch_menu ;;
             3) module_network_tuning_menu ;;
             4) install_frank_manager_command; pause_return ;;
-            5) cleanup_xray_branch_fully; pause_return ;;
-            6) cleanup_pfw_branch_fully; pause_return ;;
+            5) module_update_manager_script; pause_return ;;
+            6) cleanup_xray_branch_fully; pause_return ;;
+            7) cleanup_pfw_branch_fully; pause_return ;;
             0) echo -e "${GREEN}再见！${PLAIN}"; exit 0 ;;
             *) error "无效输入"; sleep 1 ;;
         esac
