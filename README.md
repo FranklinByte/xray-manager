@@ -69,18 +69,18 @@ sudo bash -c 'curl -fsSL https://raw.githubusercontent.com/FranklinByte/xray-man
 
 ## 已部署旧版本如何更新
 
-### 方式 1：直接覆盖脚本（通用）
+已安装 `frank` 的机器，直接执行这一行更新到最新版：
+
+```bash
+sudo bash -c 'curl -fsSL -H "Cache-Control: no-cache" "https://raw.githubusercontent.com/FranklinByte/xray-manager/main/xray_manager.sh?ts=$(date +%s)" -o /usr/local/sbin/frank && chmod 755 /usr/local/sbin/frank && ln -sf /usr/local/sbin/frank /usr/local/bin/frank && frank'
+```
+
+如果只是临时下载脚本运行：
 
 ```bash
 curl -fsSL -o xray_manager.sh https://raw.githubusercontent.com/FranklinByte/xray-manager/main/xray_manager.sh
 chmod +x xray_manager.sh
 sudo bash xray_manager.sh
-```
-
-### 方式 2：已安装 `frank` 命令时
-
-```bash
-sudo bash -c 'curl -fsSL https://raw.githubusercontent.com/FranklinByte/xray-manager/main/xray_manager.sh -o /usr/local/sbin/frank && chmod 755 /usr/local/sbin/frank && ln -sf /usr/local/sbin/frank /usr/local/bin/frank && frank'
 ```
 
 ### 命令入口说明
