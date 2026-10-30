@@ -62,6 +62,32 @@ Xray 本地化一键管理工具，基于 [RomanovCaesar/Install-Xray-Inbounds](
 
 ## 支持的协议
 
+### Xray 版本策略（Mihomo / Clash Verge）
+
+新安装固定使用 **Xray v26.6.27**，不查询或回退到上游 `latest`。这是针对
+Mihomo Reality 兼容性选择的基线，不代表所有功能和环境都没有问题；上游将该发行版标记为 Pre-release。
+
+2026-10-30 已在 Alpine Linux x86_64 上使用官方 SHA256 校验后的二进制验证：
+Mihomo 1.19.32、VLESS Reality + Vision、Chrome 指纹，在**不添加**
+`support-x25519mlkem768` 的情况下完成 Reality 握手、出口 IP 查询（HTTP 200）
+和 Google 连通性测试（HTTP 204）。测试通过回环监听及 SSH 隧道进行，未替换生产核心。
+ARM64 下载路径保留，但未实测 ARM64 运行环境。
+
+- 已安装相同版本时直接复用，新增节点不再反复下载或升级核心。
+- 已安装其他版本时，先明确确认，再校验目标核心对现有配置的兼容性。
+- 替换前将旧核心和现有配置备份到 `/var/backups/xray-manager/`；配置本身不因版本切换而重写。
+- 下载、SHA256、版本号或现有配置校验失败时停止，保留原核心。
+- 更新管理脚本本身不会自动降级正在运行的 Xray；版本切换发生在后续节点安装流程中，服务由该流程重启。
+- 如需回滚，将备份目录内的 `xray` 恢复到 `/usr/local/bin/xray`（先复制为同目录临时文件再移动替换），
+  必要时恢复 `config.json` 到 `/usr/local/etc/xray/config.json`，然后按系统执行 `rc-service xray restart` 或 `systemctl restart xray`。
+
+参考：[官方发行版](https://github.com/XTLS/Xray-core/releases/tag/v26.6.27)、
+[Mihomo Reality 兼容性说明](https://wiki.metacubex.one/config/proxies/tls/#reality-opts)。
+
+安装器回归验证（无需 root 或网络）：`bash tests/core-install.sh`。
+
+### 协议列表
+
 - Shadowsocks 2022 (SS)
 - VLESS Reality
 - VLESS Encryption (Post-Quantum, ML-KEM-768)

@@ -16,6 +16,9 @@ readonly MAGENTA='\033[95m' readonly PLAIN='\033[0m'
 # --- 路径常量 ---
 readonly XRAY_CONFIG="/usr/local/etc/xray/config.json"
 readonly XRAY_BIN="/usr/local/bin/xray"
+# 经 Mihomo 1.19.32 默认 Reality 握手实测；不要自动跟随 upstream latest。
+readonly XRAY_VERSION="v26.6.27"
+readonly XRAY_BACKUP_DIR="/var/backups/xray-manager"
 readonly GEO_DIR="/usr/local/bin"
 readonly GEO_SHARE_DIR="/usr/local/share/xray"
 readonly ADDRESS_FILE="/root/inbound_address.txt"
@@ -260,8 +263,9 @@ check_xray_status() {
 # 第二部分：Xray 核心安装（带 SHA256 校验）
 # ============================================================
 
-install_xray_core() {
-    info "开始安装 Xray 核心..."
+install_xray_core() (
+    # 子 shell 的 EXIT trap 不影响调用者，也覆盖下载/校验失败的返回路径。
+    info "安装 Mihomo 兼容版 Xray: $XRAY_VERSION"
 
     local arch machine
     machine="$(uname -m)"
@@ -271,47 +275,42 @@ install_xray_core() {
         *) error "不支持的 CPU 架构: $machine"; return 1 ;;
     esac
 
-    local api="https://api.github.com/repos/XTLS/Xray-core/releases/latest"
-    info "获取 Xray 最新版本信息..."
-    local tag
-    tag="$(curl -fsSL "$api" | grep -oE '"tag_name":\s*"[^"]+"' | head -n1 | cut -d'"' -f4)" || true
-    local version_str="${tag:-latest}"
-    info "目标版本: $version_str"
+    local current="" confirm
+    if [[ -e "$XRAY_BIN" ]]; then
+        current=$("$XRAY_BIN" version 2>/dev/null | awk 'NR == 1 {print $2}') || true
+        if [[ "$current" == "${XRAY_VERSION#v}" ]]; then
+            success "已安装兼容版 $XRAY_VERSION，复用现有核心。"
+            return 0
+        fi
+        warn "当前核心 ${current:-未知版本} 将替换为 $XRAY_VERSION，影响此核心承载的所有节点。"
+        read -rp "确认备份并切换核心版本？[y/N]: " confirm || return 1
+        [[ "$confirm" =~ ^[yY]$ ]] || { info "已取消，未修改核心或配置。"; return 1; }
+    fi
 
-    local tmpdir; tmpdir="$(mktemp -d)"
-    # 确保退出时清理
-    trap "rm -rf '$tmpdir'" RETURN
+    local tmpdir staged=""
+    tmpdir="$(mktemp -d)" || return 1
+    trap 'rm -rf -- "$tmpdir"; [[ -z "$staged" ]] || rm -f -- "$staged"' EXIT
 
     local zipname="Xray-linux-${arch}.zip"
     local dgst_name="${zipname}.dgst"
     local base_dl="https://github.com/XTLS/Xray-core/releases"
 
     # 下载二进制
-    local zip_url
-    if [[ -n "${tag:-}" ]]; then
-        zip_url="${base_dl}/download/${tag}/${zipname}"
-    else
-        zip_url="${base_dl}/latest/download/${zipname}"
-    fi
+    local zip_url="${base_dl}/download/${XRAY_VERSION}/${zipname}"
 
     info "正在下载 Xray ($zipname)..."
-    if ! curl -fL "$zip_url" -o "$tmpdir/xray.zip"; then
+    if ! curl -fL --connect-timeout 15 --max-time 180 "$zip_url" -o "$tmpdir/xray.zip"; then
         error "下载 Xray 失败"; return 1
     fi
 
     # 下载校验文件并验证 SHA256
-    local dgst_url
-    if [[ -n "${tag:-}" ]]; then
-        dgst_url="${base_dl}/download/${tag}/${dgst_name}"
-    else
-        dgst_url="${base_dl}/latest/download/${dgst_name}"
-    fi
+    local dgst_url="${base_dl}/download/${XRAY_VERSION}/${dgst_name}"
 
     info "正在下载并验证 SHA256 校验..."
-    if curl -fsSL "$dgst_url" -o "$tmpdir/dgst"; then
+    if curl -fsSL --connect-timeout 15 --max-time 30 "$dgst_url" -o "$tmpdir/dgst"; then
         local expected_sha256
         expected_sha256=$(grep -i 'SHA2-256' "$tmpdir/dgst" | head -1 | awk '{print $NF}' | tr '[:upper:]' '[:lower:]')
-        if [[ -n "$expected_sha256" ]]; then
+        if [[ "$expected_sha256" =~ ^[0-9a-f]{64}$ ]]; then
             local actual_sha256
             actual_sha256=$(sha256sum "$tmpdir/xray.zip" | awk '{print $1}')
             if [[ "$actual_sha256" != "$expected_sha256" ]]; then
@@ -323,18 +322,44 @@ install_xray_core() {
             fi
             success "SHA256 校验通过: $actual_sha256"
         else
-            warn "校验文件格式异常，跳过校验（请手动确认）"
+            error "校验文件格式异常，终止安装。"; return 1
         fi
     else
-        warn "无法下载校验文件，跳过 SHA256 校验（请手动确认）"
+        error "无法下载校验文件，终止安装。"; return 1
     fi
 
-    info "解压并安装到 /usr/local/bin ..."
-    unzip -qo "$tmpdir/xray.zip" -d "$tmpdir"
-    install -m 0755 "$tmpdir/xray" "$XRAY_BIN"
-    mkdir -p /usr/local/etc/xray /usr/local/share/xray
-    success "Xray 核心安装完成"
-}
+    if ! unzip -qo "$tmpdir/xray.zip" xray -d "$tmpdir" || ! chmod 0755 "$tmpdir/xray"; then
+        error "解压 Xray 失败。"; return 1
+    fi
+    local downloaded
+    downloaded=$("$tmpdir/xray" version 2>/dev/null | awk 'NR == 1 {print $2}') || return 1
+    if [[ "$downloaded" != "${XRAY_VERSION#v}" ]]; then
+        error "下载的核心版本与 $XRAY_VERSION 不一致，终止安装。"; return 1
+    fi
+    if [[ -s "$XRAY_CONFIG" ]]; then
+        if ! XRAY_LOCATION_ASSET="$GEO_DIR" "$tmpdir/xray" run -test -config "$XRAY_CONFIG"; then
+            error "现有配置未通过目标版本检查，保留原核心与配置。"; return 1
+        fi
+    fi
+    local backup
+    if [[ -e "$XRAY_BIN" || -e "$XRAY_CONFIG" ]]; then
+        mkdir -p "$XRAY_BACKUP_DIR" || return 1
+        backup=$(mktemp -d "$XRAY_BACKUP_DIR/$(date +%Y%m%d-%H%M%S).XXXXXX") || return 1
+        if [[ -e "$XRAY_BIN" ]]; then cp -p "$XRAY_BIN" "$backup/xray" || return 1; fi
+        if [[ -e "$XRAY_CONFIG" ]]; then
+            cp -p "$XRAY_CONFIG" "$backup/config.json" || return 1
+            chmod 600 "$backup/config.json" || return 1
+        fi
+        info "原核心和配置已备份到: $backup"
+    fi
+    mkdir -p "$(dirname "$XRAY_BIN")" "$(dirname "$XRAY_CONFIG")" "$GEO_SHARE_DIR" || return 1
+    staged=$(mktemp "${XRAY_BIN}.new.XXXXXX") || return 1
+    if ! install -m 0755 "$tmpdir/xray" "$staged" || ! mv -f "$staged" "$XRAY_BIN"; then
+        error "安装失败，未完成核心替换。"; return 1
+    fi
+    staged=""
+    success "Xray $XRAY_VERSION 核心安装完成"
+)
 
 # --- Geo 数据安装 ---
 install_geodata() {
@@ -2459,4 +2484,6 @@ main() {
     done
 }
 
-main "$@"
+if [[ "${BASH_SOURCE[0]}" == "$0" ]]; then
+    main "$@"
+fi
