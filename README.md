@@ -1,5 +1,45 @@
 # Xray Local Manager
 
+## 安装 / 更新并运行
+
+### Debian / Ubuntu
+
+```bash
+sudo bash -c 'apt-get update && apt-get install -y curl ca-certificates && mkdir -p /usr/local/sbin /usr/local/bin && curl -fsSL -H "Cache-Control: no-cache" "https://raw.githubusercontent.com/FranklinByte/xray-manager/main/xray_manager.sh?ts=$(date +%s)" -o /usr/local/sbin/frank && chmod 755 /usr/local/sbin/frank && ln -sf /usr/local/sbin/frank /usr/local/bin/frank && frank'
+```
+
+### Fedora / Rocky / AlmaLinux / RHEL / CentOS Stream（dnf）
+
+```bash
+sudo bash -c 'dnf install -y curl ca-certificates && mkdir -p /usr/local/sbin /usr/local/bin && curl -fsSL -H "Cache-Control: no-cache" "https://raw.githubusercontent.com/FranklinByte/xray-manager/main/xray_manager.sh?ts=$(date +%s)" -o /usr/local/sbin/frank && chmod 755 /usr/local/sbin/frank && ln -sf /usr/local/sbin/frank /usr/local/bin/frank && frank'
+```
+
+### CentOS / RHEL（使用 yum 的版本）
+
+```bash
+sudo bash -c 'yum install -y curl ca-certificates && mkdir -p /usr/local/sbin /usr/local/bin && curl -fsSL -H "Cache-Control: no-cache" "https://raw.githubusercontent.com/FranklinByte/xray-manager/main/xray_manager.sh?ts=$(date +%s)" -o /usr/local/sbin/frank && chmod 755 /usr/local/sbin/frank && ln -sf /usr/local/sbin/frank /usr/local/bin/frank && frank'
+```
+
+### Alpine（root 执行）
+
+```sh
+apk add --no-cache bash curl ca-certificates jq openssl unzip iproute2 coreutils && bash -c 'mkdir -p /usr/local/sbin /usr/local/bin && curl -fsSL -H "Cache-Control: no-cache" "https://raw.githubusercontent.com/FranklinByte/xray-manager/main/xray_manager.sh?ts=$(date +%s)" -o /usr/local/sbin/frank && chmod 755 /usr/local/sbin/frank && ln -sf /usr/local/sbin/frank /usr/local/bin/frank && frank'
+```
+
+> 已是 root 的用户，执行上面的其他系统命令时去掉开头的 `sudo`。Alpine 非 root 用户先执行 `su -` 切换到 root。
+
+## 日常使用 / 更新
+
+安装后，以 root 身份运行 `frank` 打开一级总菜单，选择 `5. 手动更新管理脚本` 即可更新。旧版没有更新选项时，重新执行上方对应系统的命令。
+
+- `frank`：一级总控菜单
+- `xray-m`：直达 Xray 分支（需要在 Xray 分支内主动安装）
+- `pfw`：直达 PFW（部署广州版或香港版后自动提供）
+
+> 进入 Xray / PFW 分支只显示分支菜单，不会自动下载或创建该分支文件；只有主动选择安装/部署才会写入对应分支内容。未安装分支时，实际功能菜单会拒绝进入。
+
+## 项目说明
+
 Xray 本地化一键管理工具，基于 [RomanovCaesar/Install-Xray-Inbounds](https://github.com/RomanovCaesar/Install-Xray-Inbounds) 重构。
 
 ## 与原版的区别
@@ -44,64 +84,6 @@ Xray 本地化一键管理工具，基于 [RomanovCaesar/Install-Xray-Inbounds](
 - 未安装分支时禁止进入对应实际功能菜单，避免生成相关文件
 - 完整卸载
 - 适配 Debian / Ubuntu / Alpine / CentOS 系（systemd / OpenRC）
-
-## 安装使用
-
-```bash
-curl -Lo xray_manager.sh https://raw.githubusercontent.com/FranklinByte/xray-manager/main/xray_manager.sh
-chmod +x xray_manager.sh
-sudo bash xray_manager.sh
-```
-
-或直接：
-
-```bash
-sudo bash -c "$(curl -fsSL https://raw.githubusercontent.com/FranklinByte/xray-manager/main/xray_manager.sh)"
-```
-
-推荐安装为一级总控命令 `frank`：
-
-```bash
-sudo bash -c 'curl -fsSL -H "Cache-Control: no-cache" "https://raw.githubusercontent.com/FranklinByte/xray-manager/main/xray_manager.sh?ts=$(date +%s)" -o /usr/local/sbin/frank && chmod 755 /usr/local/sbin/frank && ln -sf /usr/local/sbin/frank /usr/local/bin/frank && frank'
-```
-
-> `frank` 进入一级总菜单；`xray-m` 只在你进入 Xray 分支并主动安装/修复后才存在；`pfw` 由 PFW 分支部署后提供。
-
-## 已部署旧版本如何更新
-
-已安装 `frank` 的机器，直接运行：
-
-```bash
-frank
-```
-
-然后在一级总菜单选择：
-
-```text
-5. 手动更新管理脚本
-```
-
-如果机器上的 `frank` 太旧、菜单里没有更新选项，再用这一行强制覆盖到最新版：
-
-```bash
-sudo bash -c 'curl -fsSL -H "Cache-Control: no-cache" "https://raw.githubusercontent.com/FranklinByte/xray-manager/main/xray_manager.sh?ts=$(date +%s)" -o /usr/local/sbin/frank && chmod 755 /usr/local/sbin/frank && ln -sf /usr/local/sbin/frank /usr/local/bin/frank && frank'
-```
-
-如果只是临时下载脚本运行：
-
-```bash
-curl -fsSL -o xray_manager.sh https://raw.githubusercontent.com/FranklinByte/xray-manager/main/xray_manager.sh
-chmod +x xray_manager.sh
-sudo bash xray_manager.sh
-```
-
-### 命令入口说明
-
-- `frank`：一级总控菜单
-- `xray-m`：直达 Xray 分支（需要在 Xray 分支内主动安装）
-- `pfw`：直达 PFW（部署广州版或香港版后自动提供）
-
-> 进入 Xray / PFW 分支只显示分支菜单，不会自动下载或创建该分支文件；只有主动选择安装/部署才会写入对应分支内容。未安装分支时，实际功能菜单会拒绝进入。
 
 ## 发行版兼容性
 
