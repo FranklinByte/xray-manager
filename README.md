@@ -1,66 +1,85 @@
-# Xray Local Manager
+# Xray Manager 与 PFW
 
-## 安装 / 更新并运行
+两个独立安装、独立更新的工具，可以在同一台服务器上使用：
+
+| 命令 | 用途 | 安装的程序 |
+|---|---|---|
+| `xray-m` | Xray 代理节点、分流、Geo 数据、服务管理 | `/usr/local/sbin/xray-m`，入口 `/usr/local/bin/xray-m` |
+| `pfw` | nftables TCP/UDP 端口转发 | `/usr/local/bin/pfwd`，入口 `/usr/local/bin/pfw` |
+
+Xray 脚本已移除所有 PFW 部署和清理代码。PFW 采用实际服务器取回、SHA256 一致的 **pfwd 2.1.1 安全事务版**，不再提供旧广州版/香港 Lite 安装器。公开仓库仅包含程序，不包含服务器的转发规则、IP 清单或凭据。
+
+## 1. 独立安装 / 更新 Xray 管理器
+
+以下命令安装管理器并打开 `xray-m`。Xray 核心和节点需要在菜单中主动安装；更新管理器不会自动切换正在运行的核心版本。
 
 ### Debian / Ubuntu
 
 ```bash
-sudo bash -c 'apt-get update && apt-get install -y curl ca-certificates && mkdir -p /usr/local/sbin /usr/local/bin && curl -fsSL -H "Cache-Control: no-cache" "https://raw.githubusercontent.com/FranklinByte/xray-manager/main/xray_manager.sh?ts=$(date +%s)" -o /usr/local/sbin/frank && chmod 755 /usr/local/sbin/frank && ln -sf /usr/local/sbin/frank /usr/local/bin/frank && frank'
+sudo bash -c 'set -e; apt-get update && apt-get install -y curl ca-certificates; t=$(mktemp); trap "rm -f -- $t" EXIT; curl -fsSL -H "Cache-Control: no-cache" "https://raw.githubusercontent.com/FranklinByte/xray-manager/main/install-xray.sh" -o "$t"; bash "$t"; xray-m'
 ```
 
-### Fedora / Rocky / AlmaLinux / RHEL / CentOS Stream（dnf）
+### Fedora / Rocky / AlmaLinux / RHEL（dnf）
 
 ```bash
-sudo bash -c 'dnf install -y curl ca-certificates && mkdir -p /usr/local/sbin /usr/local/bin && curl -fsSL -H "Cache-Control: no-cache" "https://raw.githubusercontent.com/FranklinByte/xray-manager/main/xray_manager.sh?ts=$(date +%s)" -o /usr/local/sbin/frank && chmod 755 /usr/local/sbin/frank && ln -sf /usr/local/sbin/frank /usr/local/bin/frank && frank'
+sudo bash -c 'set -e; dnf install -y curl ca-certificates; t=$(mktemp); trap "rm -f -- $t" EXIT; curl -fsSL -H "Cache-Control: no-cache" "https://raw.githubusercontent.com/FranklinByte/xray-manager/main/install-xray.sh" -o "$t"; bash "$t"; xray-m'
 ```
 
-### CentOS / RHEL（使用 yum 的版本）
+### CentOS / RHEL（yum）
 
 ```bash
-sudo bash -c 'yum install -y curl ca-certificates && mkdir -p /usr/local/sbin /usr/local/bin && curl -fsSL -H "Cache-Control: no-cache" "https://raw.githubusercontent.com/FranklinByte/xray-manager/main/xray_manager.sh?ts=$(date +%s)" -o /usr/local/sbin/frank && chmod 755 /usr/local/sbin/frank && ln -sf /usr/local/sbin/frank /usr/local/bin/frank && frank'
+sudo bash -c 'set -e; yum install -y curl ca-certificates; t=$(mktemp); trap "rm -f -- $t" EXIT; curl -fsSL -H "Cache-Control: no-cache" "https://raw.githubusercontent.com/FranklinByte/xray-manager/main/install-xray.sh" -o "$t"; bash "$t"; xray-m'
 ```
 
 ### Alpine（root 执行）
 
-```sh
-apk add --no-cache bash curl ca-certificates jq openssl unzip iproute2 coreutils && bash -c 'mkdir -p /usr/local/sbin /usr/local/bin && curl -fsSL -H "Cache-Control: no-cache" "https://raw.githubusercontent.com/FranklinByte/xray-manager/main/xray_manager.sh?ts=$(date +%s)" -o /usr/local/sbin/frank && chmod 755 /usr/local/sbin/frank && ln -sf /usr/local/sbin/frank /usr/local/bin/frank && frank'
+```bash
+apk add --no-cache bash curl ca-certificates jq openssl unzip iproute2 coreutils && bash -c 'set -e; t=$(mktemp); trap "rm -f -- $t" EXIT; curl -fsSL -H "Cache-Control: no-cache" "https://raw.githubusercontent.com/FranklinByte/xray-manager/main/install-xray.sh" -o "$t"; bash "$t"; xray-m'
 ```
 
-> 已是 root 的用户，执行上面的其他系统命令时去掉开头的 `sudo`。Alpine 非 root 用户先执行 `su -` 切换到 root。
+已是 root 时去掉 `sudo`。日常运行 `xray-m`；菜单 `3` 手动更新管理器，也可以重跑对应安装命令。安装失败会停止，不直接覆盖正在运行的核心或配置。管理脚本安装备份位于 `/var/tmp/xray-manager-before-install.*`，菜单更新备份为脚本旁的 `.bak.*` 文件。
 
-## 日常使用 / 更新
+## 2. 独立安装 / 更新 PFW
 
-安装后，以 root 身份运行 `frank` 打开一级总菜单，选择 `5. 手动更新管理脚本` 即可更新。旧版没有更新选项时，重新执行上方对应系统的命令。
+当前独立安装器支持 **Ubuntu 22.04+ / Debian 12+、systemd、Python 3.10+**。其他发行版尚未验收；不要把 Xray 的跨发行版支持理解为 PFW 的支持范围。
 
-- `frank`：一级总控菜单
-- `xray-m`：直达 Xray 分支（需要在 Xray 分支内主动安装）
-- `pfw`：直达 PFW（部署广州版或香港版后自动提供）
+```bash
+sudo bash -c 'set -e; apt-get update && apt-get install -y python3 nftables curl ca-certificates; t=$(mktemp); trap "rm -f -- $t" EXIT; curl -fsSL -H "Cache-Control: no-cache" "https://raw.githubusercontent.com/FranklinByte/xray-manager/main/install-pfw.py" -o "$t"; python3 "$t"; pfw'
+```
 
-> 进入 Xray / PFW 分支只显示分支菜单，不会自动下载或创建该分支文件；只有主动选择安装/部署才会写入对应分支内容。未安装分支时，实际功能菜单会拒绝进入。
+日常运行 `pfw`；更新时重跑这条 PFW 命令。没有自动更新任务，也不依赖 `frank` 或 Xray。
 
-## 项目说明
+- **首次安装**：创建空转发规则、开启 IPv4 转发、为 nftables 增加开机 include 并启用服务。只应用 `ip pfwd_nat` 表；不执行全局 `flush ruleset`，不重启/重载共享 nftables 服务，也不覆盖原 `/etc/nftables.conf` 内容。
+- **已有安全事务版**：校验规则、解析映射、持久化 nft 文件及实时表一致后，只更新程序。保留规则、解析结果、开机配置和实时转发，不重新解析域名或重新应用规则。
+- **旧版/不完整安装**：缺少解析映射、状态不一致或发现残留配置时停止；不把旧规则当成空配置覆盖。旧广州账本版本需要单独评估迁移，不能直接强制替换。
+- **并发**：菜单和输入等待不持锁，提交、备份和安装事务才持锁；已有写入事务时报告占用者，不删除锁文件。
+- **备份**：每次安装在 `/var/backups/pfwd/install-*` 保存被管理文件的原内容。业务规则修改另有事务快照与失败回滚。
+- **防火墙**：本工具负责 DNAT/MASQUERADE；云安全组及已有 FORWARD/入口过滤策略需允许所需流量，不自动放开整个防火墙。代理监听端口与转发端口需避免冲突。
 
-Xray 本地化一键管理工具，基于 [RomanovCaesar/Install-Xray-Inbounds](https://github.com/RomanovCaesar/Install-Xray-Inbounds) 重构。
+常用命令：
 
-## 与原版的区别
+```bash
+pfw           # 交互菜单：增删改、批量修改、备份与恢复
+pfw list      # 查看规则
+pfw status    # 检查源文件、解析映射、持久化文件及实时表
+pfw backup    # 备份规则和相关状态
+pfw apply     # 明确输入 APPLY 后重新解析并原子应用当前规则
+```
 
-| | 原版 | 本版 |
-|---|---|---|
-| 架构 | 主脚本 + 7 个远程子脚本，每次从 GitHub 下载执行 | **单文件**，所有功能本地运行 |
-| 远程代码执行 | 每次点菜单都 `curl` 拉脚本并 root 执行 | **完全移除**，无任何远程脚本下载 |
-| 自动更新 | 有，可远程覆盖 `/usr/bin/` 下的脚本 | **完全移除**，无自动更新通道 |
-| Xray 二进制校验 | 无 | **SHA256 校验**（对比官方 `.dgst` 文件） |
-| 配置文件权限 | `644`（全局可读，含私钥） | `600`（仅 root 可读） |
+## 旧 frank 用户迁移
 
-## 保留的网络请求
+GitHub 发布不会自动改变已经安装的服务器。分别执行需要的安装命令即可安装/更新独立工具；不需要的工具可以不安装。
 
-仅保留以下必要的官方上游请求：
+- 原 `xray_manager.sh` URL 保留，但内容已变为 **Xray 独立管理器**。继续使用旧命令下载成 `frank` 时，也只会显示 Xray 菜单；建议改用上面的 `xray-m` 安装命令。
+- 只安装新 `xray-m` 不会自动改写已存在的旧 `frank` 副本；旧副本仍可能包含危险的旧 PFW 部署功能。确认独立入口可用后，可以用以下命令删除旧总入口（不删除 Xray、PFW 或规则）：
 
-- `github.com/XTLS/Xray-core` — 下载 Xray 二进制（带 SHA256 校验）
-- `github.com/Loyalsoldier/v2ray-rules-dat` — GeoIP / GeoSite 数据
-- `ipinfo.io` / `api.ipify.org` — 获取公网 IP（生成分享链接用）
+```bash
+sudo rm -f /usr/local/bin/frank /usr/local/sbin/frank
+```
 
-## 支持的协议
+## Xray 功能与版本
+
+支持 SS2022、VLESS Reality、VLESS Encryption、多节点、服务端分流、Geo 更新、配置还原、日志、服务管理及手动 FQ/BBR 设置。基于 [RomanovCaesar/Install-Xray-Inbounds](https://github.com/RomanovCaesar/Install-Xray-Inbounds) 重构。
 
 ### Xray 版本策略（Mihomo / Clash Verge）
 
@@ -86,40 +105,15 @@ ARM64 下载路径保留，但未实测 ARM64 运行环境。
 
 安装器回归验证（无需 root 或网络）：`bash tests/core-install.sh`。
 
-### 协议列表
+## 验证
 
-- Shadowsocks 2022 (SS)
-- VLESS Reality
-- VLESS Encryption (Post-Quantum, ML-KEM-768)
+Xray 核心安装器有 11 个回归场景；管理器另测独立安装、自身重复安装和手动更新隔离。PFW 包含 7 个锁/事务回归、8 个安装回归，安装回归在独立 Linux 网络命名空间使用真实 nftables，覆盖新装、更新保留规则、开机文件加载、损坏/旧状态拒绝和失败回滚。服务与 sysctl 调用在安装测试中使用桩；未声称完整发行版矩阵验收。
 
-## 功能
+```bash
+bash tests/core-install.sh
+bash tests/manager-install.sh
+python3 tests/test_pfw_lock.py
+sudo unshare -n python3 tests/test_pfw_install.py
+```
 
-- 安装 / 管理 / 删除各协议节点
-- 多协议多节点共存
-- 服务端分流 (Routing) 配置
-- GeoIP / GeoSite 数据更新（支持 crontab 定时）
-- 自定义连接地址（NAT / DDNS 场景）
-- 配置还原（URL 下载 / 手动编辑 / 测试）
-- 一级菜单直接提供网络优化（开启 FQ / BBR）
-- 一级总菜单（Xray 分支 / PFW 分支）
-- PFW 套件部署（广州版/香港 Lite，自动开启 IPv4 转发）
-- 手动更新本脚本（菜单内）
-- 一级菜单可一键彻底清理 Xray / PFW 分支痕迹
-- 命令分层：`frank` 进入一级菜单，`xray-m` 直达 Xray 分支，`pfw` 直达 PFW
-- Xray / PFW 可按需单独安装、同机共存，并支持分支级彻底清理
-- 未安装分支时禁止进入对应实际功能菜单，避免生成相关文件
-- 完整卸载
-- 适配 Debian / Ubuntu / Alpine / CentOS 系（systemd / OpenRC）
-
-## 发行版兼容性
-
-- Debian 11/12：✅ 支持
-- Ubuntu 20.04/22.04/24.04：✅ 支持
-- Alpine 3.x：✅ 支持
-- CentOS / RHEL / Rocky / AlmaLinux / Fedora：✅ 支持（自动识别 dnf / yum）
-
-## 系统要求
-
-- Linux (x86_64 / arm64)
-- Root 权限
-- 依赖：`jq` `curl` `openssl` `unzip`（脚本会自动安装）
+不要绕过网络命名空间保护直接运行 nftables 安装测试。

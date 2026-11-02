@@ -1,8 +1,8 @@
 #!/bin/bash
 # ==============================================================================
 # Xray 本地化管理工具 (基于 Caesar 脚本重构)
-# 所有功能合并为单文件，已移除全部远程脚本下载/执行能力
-# 仅保留 Xray 官方二进制 + Geo 数据的下载（带 SHA256 校验）
+# Xray 独立管理器：仅管理 Xray，手动更新自身
+# Xray 官方二进制使用 SHA256 校验；不会安装或清理端口转发工具
 # ==============================================================================
 
 # --- Shell 设置 ---
@@ -23,7 +23,6 @@ readonly GEO_DIR="/usr/local/bin"
 readonly GEO_SHARE_DIR="/usr/local/share/xray"
 readonly ADDRESS_FILE="/root/inbound_address.txt"
 readonly NETWORK_TUNING_CONF="/etc/sysctl.d/99-xray-network-tuning.conf"
-readonly PFW_FORWARD_CONF="/etc/sysctl.d/99-pfw-forward.conf"
 readonly SCRIPT_UPDATE_URL="https://raw.githubusercontent.com/FranklinByte/xray-manager/main/xray_manager.sh"
 
 # --- 全局变量 ---
@@ -206,10 +205,6 @@ is_xray_artifacts_present() {
     [[ -f "/usr/local/sbin/xray-m" || -L "/usr/local/bin/xray-m" || -f "$XRAY_BIN" || -d "/usr/local/etc/xray" || -d "/var/log/xray" ]]
 }
 
-is_pfw_artifacts_present() {
-    [[ -f "/usr/local/bin/pfw" || -f "/usr/local/bin/pfwd" || -f "/usr/local/bin/pfwd-acct" || -d "/etc/pfwd" || -f "/etc/nftables.d/pfwd.nft" || -f "/etc/nftables.d/pfwd_stat.nft" ]]
-}
-
 xray_branch_status_text() {
     local status="${YELLOW}未安装${PLAIN}"
     if is_xray_artifacts_present; then
@@ -218,25 +213,9 @@ xray_branch_status_text() {
     echo -e "$status"
 }
 
-pfw_branch_status_text() {
-    local status="${YELLOW}未安装${PLAIN}"
-    if is_pfw_artifacts_present; then
-        status="${GREEN}已安装${PLAIN}"
-    fi
-    echo -e "$status"
-}
-
 require_xray_installed_for_functions() {
     if ! is_xray_artifacts_present; then
         error "Xray 分支未安装。请先主动安装/修复 xray-m 或安装 Xray 后再进入功能菜单。"
-        return 1
-    fi
-    return 0
-}
-
-require_pfw_installed_for_functions() {
-    if ! is_pfw_artifacts_present; then
-        error "PFW 分支未安装。请先部署广州版或香港版后再进入功能菜单。"
         return 1
     fi
     return 0
@@ -1580,7 +1559,7 @@ module_update_manager_script() {
     read -rp "确认从该地址更新已安装的管理脚本吗？[y/N]: " confirm
     [[ ! $confirm =~ ^[yY]$ ]] && { info "已取消更新"; return; }
 
-    local self_path tmp backup target stamp
+    local self_path tmp backup target stamp staged
     local targets=()
     self_path="$(readlink -f "$0" 2>/dev/null || realpath "$0" 2>/dev/null || echo "$0")"
     tmp="$(mktemp)"
@@ -1597,7 +1576,6 @@ module_update_manager_script() {
     }
 
     add_update_target "$self_path"
-    add_update_target /usr/local/sbin/frank
     add_update_target /usr/local/sbin/xray-m
 
     info "正在下载新版本..."
@@ -1618,31 +1596,20 @@ module_update_manager_script() {
         backup="${target}.bak.${stamp}"
         cp "$target" "$backup"
         info "已备份: $backup"
-        if install -m 755 "$tmp" "$target"; then
+        staged="$(mktemp "${target}.new.XXXXXX")" || { rm -f "$tmp"; return 1; }
+        if install -m 755 "$tmp" "$staged" && mv -f "$staged" "$target"; then
             success "已更新: $target"
         else
             rm -f "$tmp"
+            rm -f "$staged"
             error "写入失败: $target"
             return 1
         fi
     done
     rm -f "$tmp"
 
-    ln -sf /usr/local/sbin/frank /usr/local/bin/frank 2>/dev/null || true
     [[ -f /usr/local/sbin/xray-m ]] && ln -sf /usr/local/sbin/xray-m /usr/local/bin/xray-m 2>/dev/null || true
     info "请重新运行脚本以加载新版本。"
-}
-
-install_frank_manager_command() {
-    local self_path target
-    self_path="$(readlink -f "$0" 2>/dev/null || realpath "$0" 2>/dev/null || echo "$0")"
-    target="/usr/local/sbin/frank"
-    [[ ! -f "$self_path" ]] && { error "当前脚本路径无效: $self_path"; return 1; }
-
-    cp "$self_path" "$target"
-    chmod 755 "$target"
-    ln -sf "$target" /usr/local/bin/frank
-    success "一级总控命令已安装: frank"
 }
 
 install_xray_manager_command() {
@@ -1651,9 +1618,17 @@ install_xray_manager_command() {
     target="/usr/local/sbin/xray-m"
     [[ ! -f "$self_path" ]] && { error "当前脚本路径无效: $self_path"; return 1; }
 
-    cp "$self_path" "$target"
-    chmod 755 "$target"
-    ln -sf "$target" /usr/local/bin/xray-m
+    mkdir -p /usr/local/sbin /usr/local/bin || return 1
+    if [[ "$self_path" != "$target" ]]; then
+        local staged
+        staged="$(mktemp "${target}.new.XXXXXX")" || return 1
+        if ! install -m 755 "$self_path" "$staged" || ! mv -f "$staged" "$target"; then
+            rm -f "$staged"
+            return 1
+        fi
+    fi
+    chmod 755 "$target" || return 1
+    ln -sf "$target" /usr/local/bin/xray-m || return 1
     success "Xray 分支命令已安装: xray-m"
 }
 
@@ -1740,19 +1715,8 @@ remove_current_script_file() {
 
     rm -f "$self_path"
     success "当前脚本文件已删除"
-    info "如果你还需要管理器，请重新下载并安装 frank。"
+    info "如果你还需要管理器，请重新下载并安装 xray-m。"
     exit 0
-}
-
-enable_pfw_forwarding() {
-    printf 'net.ipv4.ip_forward=1\n' > "$PFW_FORWARD_CONF"
-    sysctl -w net.ipv4.ip_forward=1 >/dev/null 2>&1 || true
-    if [[ "$(sysctl -n net.ipv4.ip_forward 2>/dev/null || echo 0)" == "1" ]]; then
-        success "已开启 IPv4 转发 (net.ipv4.ip_forward=1)"
-    else
-        error "IPv4 转发开启失败，请检查 sysctl 配置。"
-        return 1
-    fi
 }
 
 module_manager_cleanup_menu() {
@@ -1773,470 +1737,6 @@ module_manager_cleanup_menu() {
             2) remove_xray_manager_command ;;
             3) cleanup_manager_environment ;;
             4) remove_current_script_file ;;
-            0) return ;;
-            *) error "无效输入" ;;
-        esac
-        pause_return
-    done
-}
-
-deploy_pfw_gz() {
-    info "开始部署广州版 PFW（规则管理 + 账本）..."
-    install_packages nftables gawk
-    enable_pfw_forwarding || return 1
-
-    mkdir -p /etc/pfwd /etc/nftables.d
-    touch /etc/pfwd/rules.tsv /etc/pfwd/usage.tsv
-
-    cat > /etc/nftables.conf <<'NF'
-#!/usr/sbin/nft -f
-flush ruleset
-include "/etc/nftables.d/*.nft"
-NF
-
-    if command -v systemctl >/dev/null 2>&1; then
-        systemctl enable nftables >/dev/null 2>&1 || true
-    fi
-
-    cat > /usr/local/bin/pfwd <<'PFWD'
-#!/usr/bin/env bash
-set -euo pipefail
-RULES="/etc/pfwd/rules.tsv"
-NFT_NAT="/etc/nftables.d/pfwd.nft"
-NFT_STAT="/etc/nftables.d/pfwd_stat.nft"
-TABLE_NAT="pfwd_nat"
-TABLE_STAT="pfwd_stat"
-mkdir -p /etc/pfwd /etc/nftables.d
-touch "$RULES"
-next_id(){ [[ -s "$RULES" ]] || { echo 1; return; }; awk -F'\t' 'BEGIN{m=0}$1+0>m{m=$1}END{print m+1}' "$RULES"; }
-ask(){ read -rp "$1" v; [[ "$v" =~ ^[Qq]$ ]] && return 1; echo "$v"; }
-confirm(){ read -rp "${1:-确认执行?} [y/N]: " c; [[ "$c" == "y" || "$c" == "Y" ]]; }
-list_rules(){
-  echo "==== 当前规则（TCP+UDP）===="
-  [[ -s "$RULES" ]] || { echo "(空)"; return; }
-  printf "%-4s %-7s %-8s %-18s %-8s %-20s\n" "ID" "PROTO" "LPORT" "DEST_IP" "DPORT" "NOTE"
-  awk -F'\t' '{n=$6;if(n=="")n="-";printf "%-4s %-7s %-8s %-18s %-8s %-20s\n",$1,$2,$3,$4,$5,n}' "$RULES"
-}
-gen_nat(){
-  {
-    echo "table ip $TABLE_NAT {"
-    echo "  chain prerouting { type nat hook prerouting priority dstnat; policy accept;"
-    while IFS=$'\t' read -r id proto lp ip dp note; do
-      [[ -n "${id:-}" ]] || continue
-      echo "    tcp dport $lp counter dnat to $ip:$dp comment \"pfwd:$id:tcp\""
-      echo "    udp dport $lp counter dnat to $ip:$dp comment \"pfwd:$id:udp\""
-    done < "$RULES"
-    echo "  }"
-    echo "  chain postrouting { type nat hook postrouting priority srcnat; policy accept;"
-    while IFS=$'\t' read -r id proto lp ip dp note; do
-      [[ -n "${id:-}" ]] || continue
-      echo "    ip daddr $ip tcp dport $dp counter masquerade comment \"pfwd:$id:tcp\""
-      echo "    ip daddr $ip udp dport $dp counter masquerade comment \"pfwd:$id:udp\""
-    done < "$RULES"
-    echo "  }"
-    echo "}"
-  } > /tmp/pfwd_nat.nft
-}
-gen_stat(){
-  {
-    echo "table inet $TABLE_STAT {"
-    echo "  chain forward { type filter hook forward priority filter; policy accept;"
-    while IFS=$'\t' read -r id proto lp ip dp note; do
-      [[ -n "${id:-}" ]] || continue
-      echo "    ip daddr $ip tcp dport $dp counter comment \"pfwd:$lp:tcp:up\""
-      echo "    ip saddr $ip tcp sport $dp counter comment \"pfwd:$lp:tcp:down\""
-      echo "    ip daddr $ip udp dport $dp counter comment \"pfwd:$lp:udp:up\""
-      echo "    ip saddr $ip udp sport $dp counter comment \"pfwd:$lp:udp:down\""
-    done < "$RULES"
-    echo "  }"
-    echo "}"
-  } > /tmp/pfwd_stat.nft
-}
-apply_rules(){
-  confirm "将重建 NAT+STAT 规则，继续吗？" || { echo "已取消"; return; }
-  command -v pfwd-acct >/dev/null 2>&1 && pfwd-acct sync >/dev/null 2>&1 || true
-  gen_nat; gen_stat
-  nft delete table ip "$TABLE_NAT" 2>/dev/null || true
-  nft delete table inet "$TABLE_STAT" 2>/dev/null || true
-  cp /tmp/pfwd_nat.nft "$NFT_NAT"
-  cp /tmp/pfwd_stat.nft "$NFT_STAT"
-  nft -f "$NFT_NAT"
-  nft -f "$NFT_STAT"
-  command -v systemctl >/dev/null 2>&1 && systemctl enable nftables >/dev/null 2>&1 || true
-  echo "✅ 已应用（NAT+STAT，TCP+UDP）"
-}
-add_rule(){
-  echo "添加规则（默认TCP+UDP，q取消）"
-  lp=$(ask "本机监听端口: ") || { echo "已取消"; return; }
-  ip=$(ask "目标IP/域名: ") || { echo "已取消"; return; }
-  dp=$(ask "目标端口: ") || { echo "已取消"; return; }
-  note=$(ask "备注(可空): ") || { echo "已取消"; return; }
-  [[ "$lp" =~ ^[0-9]+$ && "$dp" =~ ^[0-9]+$ ]] || { echo "端口无效"; return; }
-  ((lp>=1 && lp<=65535 && dp>=1 && dp<=65535)) || { echo "端口范围无效"; return; }
-  id=$(next_id)
-  printf "%s\t%s\t%s\t%s\t%s\t%s\n" "$id" "both" "$lp" "$ip" "$dp" "$note" >> "$RULES"
-  echo "✅ 已添加 ID=$id"
-}
-edit_rule(){
-  list_rules
-  id=$(ask "修改ID(q取消): ") || { echo "已取消"; return; }
-  line=$(awk -F'\t' -v id="$id" '$1==id{print;exit}' "$RULES" || true)
-  [[ -n "$line" ]] || { echo "ID不存在"; return; }
-  IFS=$'\t' read -r _ proto lp ip dp note <<<"$line"
-  nlp=$(ask "监听端口[$lp]: ") || { echo "已取消"; return; }; nlp=${nlp:-$lp}
-  nip=$(ask "目标IP/域名[$ip]: ") || { echo "已取消"; return; }; nip=${nip:-$ip}
-  ndp=$(ask "目标端口[$dp]: ") || { echo "已取消"; return; }; ndp=${ndp:-$dp}
-  nno=$(ask "备注[$note]: ") || { echo "已取消"; return; }; nno=${nno:-$note}
-  awk -F'\t' -v OFS='\t' -v id="$id" -v lp="$nlp" -v ip="$nip" -v dp="$ndp" -v no="$nno" '{if($1==id){$2="both";$3=lp;$4=ip;$5=dp;$6=no} print}' "$RULES" > /tmp/rules.tsv
-  mv /tmp/rules.tsv "$RULES"
-  echo "✅ 已修改"
-}
-del_rule(){
-  list_rules
-  id=$(ask "删除ID(q取消): ") || { echo "已取消"; return; }
-  confirm "确认删除 ID=$id ?" || { echo "已取消"; return; }
-  awk -F'\t' -v id="$id" '$1!=id' "$RULES" > /tmp/rules.tsv
-  mv /tmp/rules.tsv "$RULES"
-  echo "✅ 已删除"
-}
-show_live_nat(){ nft list table ip "$TABLE_NAT" || echo "(NAT表不存在)"; }
-show_live_stat(){ nft list table inet "$TABLE_STAT" || echo "(STAT表不存在)"; }
-while true; do
-  echo
-  echo "====== pfwd（广州版）======"
-  echo "1) 查看规则"
-  echo "2) 添加规则"
-  echo "3) 修改规则"
-  echo "4) 删除规则"
-  echo "5) 应用规则"
-  echo "6) 查看NAT实时规则"
-  echo "7) 查看STAT实时规则"
-  echo "0) 返回"
-  read -rp "选择: " c
-  case "$c" in
-    1) list_rules ;;
-    2) add_rule ;;
-    3) edit_rule ;;
-    4) del_rule ;;
-    5) apply_rules ;;
-    6) show_live_nat ;;
-    7) show_live_stat ;;
-    0) exit 0 ;;
-    *) echo "无效选项" ;;
-  esac
-done
-PFWD
-    chmod +x /usr/local/bin/pfwd
-
-    cat > /usr/local/bin/pfwd-acct <<'ACCT'
-#!/usr/bin/env bash
-set -euo pipefail
-RULES="/etc/pfwd/rules.tsv"
-USAGE="/etc/pfwd/usage.tsv"
-TABLE="pfwd_stat"
-MAX_DELTA=$((50*1024*1024*1024))
-mkdir -p /etc/pfwd
-touch "$RULES" "$USAGE"
-today(){ date +%F; }
-get_note(){ local p="$1"; awk -F'\t' -v p="$p" '$3==p{print $6;exit}' "$RULES"; }
-ensure_port_row(){ local p="$1" n; grep -qE "^${p}[[:space:]]" "$USAGE" && return 0; n="$(get_note "$p")"; n="${n:--}"; printf "%s\t0\t0\t%s\t%s\n" "$p" "$(today)" "$n" >> "$USAGE"; }
-sum_port_bytes(){
-  local p="$1"
-  nft -a list table inet "$TABLE" 2>/dev/null | awk -v p="$p" '/comment "pfwd:/ && $0 ~ ("pfwd:" p ":") {for(i=1;i<=NF;i++) if($i=="bytes"){s+=$(i+1)}} END{print s+0}'
-}
-sync_once(){
-  [[ -s "$RULES" ]] || exit 0
-  awk -F'\t' '{print $3}' "$RULES" | sort -un | while read -r p; do
-    [[ -n "$p" ]] || continue
-    ensure_port_row "$p"
-    cur=$(sum_port_bytes "$p")
-    line=$(awk -F'\t' -v p="$p" '$1==p{print;exit}' "$USAGE")
-    IFS=$'\t' read -r _ total last reset note <<<"$line"
-    total=${total:-0}; last=${last:-0}; reset=${reset:-$(today)}; note=${note:--}
-    if (( cur < last )); then
-      new_total=$total; new_last=$cur
-    else
-      delta=$((cur-last))
-      if (( delta > MAX_DELTA )); then
-        new_total=$total; new_last=$last
-      else
-        new_total=$((total+delta)); new_last=$cur
-      fi
-    fi
-    awk -F'\t' -v OFS='\t' -v p="$p" -v t="$new_total" -v l="$new_last" -v r="$reset" -v n="$note" '{if($1==p){$2=t;$3=l;$4=r;$5=n} print}' "$USAGE" > /tmp/usage.tsv
-    mv /tmp/usage.tsv "$USAGE"
-  done
-}
-show_usage(){ sync_once || true; echo "PORT    TOTAL(GB)   RESET_DATE   NOTE"; awk -F'\t' '{printf "%-7s %-10.3f %-12s %s\n",$1,$2/1024/1024/1024,$4,$5}' "$USAGE" | sort -n; }
-reset_port(){ read -rp "端口: " p; awk -F'\t' -v OFS='\t' -v p="$p" '{if($1==p){$2=0;$3=0;$4=strftime("%Y-%m-%d")} print}' "$USAGE" > /tmp/usage.tsv; mv /tmp/usage.tsv "$USAGE"; echo "✅ 已重置 $p"; }
-set_reset_date(){ read -rp "端口: " p; read -rp "重置日期(YYYY-MM-DD): " d; awk -F'\t' -v OFS='\t' -v p="$p" -v d="$d" '{if($1==p){$4=d} print}' "$USAGE" > /tmp/usage.tsv; mv /tmp/usage.tsv "$USAGE"; echo "✅ 已设置 $p 重置日期为 $d"; }
-set_total(){ read -rp "端口: " p; read -rp "总流量(GB): " g; b=$(awk -v g="$g" 'BEGIN{printf "%.0f", g*1024*1024*1024}'); awk -F'\t' -v OFS='\t' -v p="$p" -v b="$b" '{if($1==p){$2=b} print}' "$USAGE" > /tmp/usage.tsv; mv /tmp/usage.tsv "$USAGE"; echo "✅ 已设置 $p 总流量为 ${g}GB"; }
-case "${1:-menu}" in
-  sync) sync_once ;;
-  show) show_usage ;;
-  menu)
-    while true; do
-      echo
-      echo "====== pfwd-acct（广州账本）======"
-      echo "1) 查看累计流量"
-      echo "2) 手动同步一次"
-      echo "3) 重置端口流量"
-      echo "4) 设置端口重置日期"
-      echo "5) 手动修改端口总流量"
-      echo "0) 返回"
-      read -rp "选择: " c
-      case "$c" in
-        1) show_usage ;;
-        2) sync_once; echo "✅ 已同步" ;;
-        3) reset_port ;;
-        4) set_reset_date ;;
-        5) set_total ;;
-        0) exit 0 ;;
-        *) echo "无效选项" ;;
-      esac
-    done
-    ;;
-  *) echo "用法: pfwd-acct [sync|show|menu]" ;;
-esac
-ACCT
-    chmod +x /usr/local/bin/pfwd-acct
-
-    cat > /usr/local/bin/pfw <<'PFW'
-#!/usr/bin/env bash
-set -euo pipefail
-while true; do
-  echo
-  echo "========== PFW =========="
-  echo "1) 规则管理（pfwd）"
-  echo "2) 账本统计（pfwd-acct）"
-  echo "0) 退出"
-  read -rp "选择: " c
-  case "$c" in
-    1) /usr/local/bin/pfwd ;;
-    2) /usr/local/bin/pfwd-acct ;;
-    0) exit 0 ;;
-    *) echo "无效选项" ;;
-  esac
-done
-PFW
-    chmod +x /usr/local/bin/pfw
-
-    if command -v systemctl >/dev/null 2>&1; then
-        cat > /etc/systemd/system/pfwd-acct-sync.service <<'SVC'
-[Unit]
-Description=pfwd acct sync
-
-[Service]
-Type=oneshot
-ExecStart=/usr/local/bin/pfwd-acct sync
-SVC
-
-        cat > /etc/systemd/system/pfwd-acct-sync.timer <<'TMR'
-[Unit]
-Description=Run pfwd-acct sync every 60s
-
-[Timer]
-OnBootSec=30s
-OnUnitActiveSec=60s
-AccuracySec=1s
-Unit=pfwd-acct-sync.service
-
-[Install]
-WantedBy=timers.target
-TMR
-
-        systemctl daemon-reload
-        systemctl enable --now pfwd-acct-sync.timer >/dev/null 2>&1 || true
-    else
-        local tmp_cron
-        tmp_cron="$(mktemp)"
-        crontab -l 2>/dev/null | grep -v "pfwd-acct sync" > "$tmp_cron" || true
-        echo "* * * * * /usr/local/bin/pfwd-acct sync >/dev/null 2>&1" >> "$tmp_cron"
-        crontab "$tmp_cron" || true
-        rm -f "$tmp_cron"
-    fi
-
-    success "广州版 pfw 部署完成，命令：pfw"
-}
-
-deploy_pfw_hk() {
-    info "开始部署香港版 PFW Lite（仅规则管理）..."
-    install_packages nftables
-    enable_pfw_forwarding || return 1
-
-    mkdir -p /etc/pfwd /etc/nftables.d
-    touch /etc/pfwd/rules.tsv
-
-    cat > /etc/nftables.conf <<'NF'
-#!/usr/sbin/nft -f
-flush ruleset
-include "/etc/nftables.d/*.nft"
-NF
-
-    command -v systemctl >/dev/null 2>&1 && systemctl enable nftables >/dev/null 2>&1 || true
-
-    cat > /usr/local/bin/pfwd <<'PFWD'
-#!/usr/bin/env bash
-set -euo pipefail
-RULES="/etc/pfwd/rules.tsv"
-NFT="/etc/nftables.d/pfwd.nft"
-TABLE="pfwd_nat"
-mkdir -p /etc/pfwd /etc/nftables.d
-touch "$RULES"
-next_id(){ [[ -s "$RULES" ]] || { echo 1; return; }; awk -F'\t' 'BEGIN{m=0}$1+0>m{m=$1}END{print m+1}' "$RULES"; }
-ask(){ read -rp "$1" v; [[ "$v" =~ ^[Qq]$ ]] && return 1; echo "$v"; }
-confirm(){ read -rp "${1:-确认执行?} [y/N]: " c; [[ "$c" == "y" || "$c" == "Y" ]]; }
-list_rules(){
-  echo "==== 当前转发规则（TCP+UDP） ===="
-  [[ -s "$RULES" ]] || { echo "(空)"; return; }
-  printf "%-4s %-7s %-10s %-22s %-10s %-20s\n" "ID" "PROTO" "LPORT" "DEST_IP" "DPORT" "NOTE"
-  awk -F'\t' '{n=$6;if(n=="")n="-";printf "%-4s %-7s %-10s %-22s %-10s %-20s\n",$1,$2,$3,$4,$5,n}' "$RULES"
-}
-gen_nft(){
-  {
-    echo "table ip $TABLE {"
-    echo "  chain prerouting { type nat hook prerouting priority dstnat; policy accept;"
-    while IFS=$'\t' read -r id proto lp ip dp note; do
-      [[ -n "${id:-}" ]] || continue
-      echo "    tcp dport $lp counter dnat to $ip:$dp comment \"pfwd:$id:tcp\""
-      echo "    udp dport $lp counter dnat to $ip:$dp comment \"pfwd:$id:udp\""
-    done < "$RULES"
-    echo "  }"
-    echo "  chain postrouting { type nat hook postrouting priority srcnat; policy accept;"
-    while IFS=$'\t' read -r id proto lp ip dp note; do
-      [[ -n "${id:-}" ]] || continue
-      echo "    ip daddr $ip tcp dport $dp counter masquerade comment \"pfwd:$id:tcp\""
-      echo "    ip daddr $ip udp dport $dp counter masquerade comment \"pfwd:$id:udp\""
-    done < "$RULES"
-    echo "  }"
-    echo "}"
-  } > /tmp/pfwd.nft
-}
-apply_rules(){
-  confirm "将重载 nft 规则，继续吗？" || { echo "已取消"; return; }
-  gen_nft
-  nft delete table ip "$TABLE" 2>/dev/null || true
-  cp /tmp/pfwd.nft "$NFT"
-  nft -f "$NFT"
-  command -v systemctl >/dev/null 2>&1 && systemctl enable nftables >/dev/null 2>&1 || true
-  echo "✅ 已应用（自动 TCP+UDP）"
-}
-add_rule(){
-  echo "添加规则（默认TCP+UDP，输入 q 可取消）"
-  lp=$(ask "本机监听端口: ") || { echo "已取消"; return; }
-  ip=$(ask "目标IP/域名: ") || { echo "已取消"; return; }
-  dp=$(ask "目标端口: ") || { echo "已取消"; return; }
-  note=$(ask "备注(可空): ") || { echo "已取消"; return; }
-  [[ "$lp" =~ ^[0-9]+$ && "$dp" =~ ^[0-9]+$ ]] || { echo "端口无效"; return; }
-  ((lp>=1 && lp<=65535 && dp>=1 && dp<=65535)) || { echo "端口范围无效"; return; }
-  id=$(next_id)
-  printf "%s\t%s\t%s\t%s\t%s\t%s\n" "$id" "both" "$lp" "$ip" "$dp" "$note" >> "$RULES"
-  echo "✅ 已添加 ID=$id"
-}
-edit_rule(){
-  list_rules
-  id=$(ask "修改ID(输入q取消): ") || { echo "已取消"; return; }
-  line=$(awk -F'\t' -v id="$id" '$1==id{print;exit}' "$RULES" || true)
-  [[ -n "$line" ]] || { echo "ID不存在"; return; }
-  IFS=$'\t' read -r _ proto lp ip dp note <<<"$line"
-  nlp=$(ask "监听端口[$lp]: ") || { echo "已取消"; return; }; nlp=${nlp:-$lp}
-  nip=$(ask "目标IP/域名[$ip]: ") || { echo "已取消"; return; }; nip=${nip:-$ip}
-  ndp=$(ask "目标端口[$dp]: ") || { echo "已取消"; return; }; ndp=${ndp:-$dp}
-  nno=$(ask "备注[$note]: ") || { echo "已取消"; return; }; nno=${nno:-$note}
-  awk -F'\t' -v OFS='\t' -v id="$id" -v lp="$nlp" -v ip="$nip" -v dp="$ndp" -v no="$nno" '{if($1==id){$2="both";$3=lp;$4=ip;$5=dp;$6=no} print}' "$RULES" > /tmp/rules.tsv
-  mv /tmp/rules.tsv "$RULES"
-  echo "✅ 已修改"
-}
-del_rule(){
-  list_rules
-  id=$(ask "删除ID(输入q取消): ") || { echo "已取消"; return; }
-  confirm "确认删除 ID=$id ?" || { echo "已取消"; return; }
-  awk -F'\t' -v id="$id" '$1!=id' "$RULES" > /tmp/rules.tsv
-  mv /tmp/rules.tsv "$RULES"
-  echo "✅ 已删除"
-}
-show_live(){ nft list table ip "$TABLE" || echo "(表不存在，先应用规则)"; }
-while true; do
-  echo
-  echo "====== pfwd lite（香港专用，TCP+UDP一体）======"
-  echo "1) 查看规则"
-  echo "2) 添加规则（自动TCP+UDP）"
-  echo "3) 修改规则"
-  echo "4) 删除规则"
-  echo "5) 应用规则"
-  echo "6) 查看nft实时规则"
-  echo "0) 退出"
-  read -rp "选择: " c
-  case "$c" in
-    1) list_rules ;;
-    2) add_rule ;;
-    3) edit_rule ;;
-    4) del_rule ;;
-    5) apply_rules ;;
-    6) show_live ;;
-    0) exit 0 ;;
-    *) echo "无效选项" ;;
-  esac
-done
-PFWD
-    chmod +x /usr/local/bin/pfwd
-
-    cat > /usr/local/bin/pfw <<'PFW'
-#!/usr/bin/env bash
-exec /usr/local/bin/pfwd
-PFW
-    chmod +x /usr/local/bin/pfw
-
-    success "香港版 pfw lite 部署完成，命令：pfw"
-}
-
-cleanup_pfw_branch_fully() {
-    read -rp "将彻底清理 PFW 分支痕迹（pfw/pfwd/规则/账本/nft/定时任务），继续吗？[y/N]: " confirm
-    [[ ! $confirm =~ ^[yY]$ ]] && { info "已取消"; return; }
-
-    rm -f /usr/local/bin/pfw /usr/local/bin/pfwd /usr/local/bin/pfwd-acct
-    rm -rf /etc/pfwd
-    rm -f /etc/nftables.d/pfwd.nft /etc/nftables.d/pfwd_stat.nft "$PFW_FORWARD_CONF"
-
-    nft delete table ip pfwd_nat 2>/dev/null || true
-    nft delete table inet pfwd_stat 2>/dev/null || true
-
-    if command -v systemctl >/dev/null 2>&1; then
-        systemctl disable --now pfwd-acct-sync.timer >/dev/null 2>&1 || true
-        rm -f /etc/systemd/system/pfwd-acct-sync.service /etc/systemd/system/pfwd-acct-sync.timer
-        systemctl daemon-reload || true
-    fi
-
-    local tmp_cron
-    tmp_cron="$(mktemp)"
-    crontab -l 2>/dev/null | grep -v "pfwd-acct sync" > "$tmp_cron" || true
-    crontab "$tmp_cron" 2>/dev/null || true
-    rm -f "$tmp_cron"
-    sysctl --system >/dev/null 2>&1 || true
-
-    success "PFW 分支已彻底清理完成"
-}
-
-remove_pfw_suite() {
-    cleanup_pfw_branch_fully
-}
-
-module_pfw_deploy_menu() {
-    while true; do
-        clear
-        echo "================================================="
-        echo "      PFW 套件部署"
-        echo "================================================="
-        echo "  1. 部署广州版 (规则+账本+定时同步)"
-        echo "  2. 部署香港版 Lite (仅规则管理)"
-        echo "  3. 移除 PFW 套件"
-        echo "  0. 返回主菜单"
-        echo "================================================="
-        read -rp "请输入选项 [0-3]: " c
-        case "$c" in
-            1) deploy_pfw_gz ;;
-            2) deploy_pfw_hk ;;
-            3) remove_pfw_suite ;;
             0) return ;;
             *) error "无效输入" ;;
         esac
@@ -2376,7 +1876,7 @@ module_xray_branch_menu() {
     while true; do
         clear
         echo -e "${CYAN}=================================================${PLAIN}"
-        echo -e "${CYAN}                  Xray 分支                      ${PLAIN}"
+        echo -e "${CYAN}                  Xray 管理器                      ${PLAIN}"
         echo -e "${CYAN}=================================================${PLAIN}"
         echo -e "  分支状态: $(xray_branch_status_text)"
         check_xray_status
@@ -2385,103 +1885,32 @@ module_xray_branch_menu() {
         echo -e "  ${GREEN}2.${PLAIN} 进入 Xray 功能菜单"
         echo -e "  ${YELLOW}3.${PLAIN} 手动更新当前脚本"
         echo -e "  ${RED}4.${PLAIN} 一键彻底清理 Xray 分支"
-        echo -e "  ${CYAN}0.${PLAIN} 返回主菜单"
+        echo -e "  ${MAGENTA}5.${PLAIN} 网络优化 (FQ / BBR)"
+        echo -e "  ${CYAN}0.${PLAIN} 退出"
         echo -e "${CYAN}=================================================${PLAIN}"
-        read -rp "请输入选项 [0-4]: " c
+        read -rp "请输入选项 [0-5]: " c || return
         case "$c" in
             1) install_xray_manager_command; pause_return ;;
             2)
-                require_xray_installed_for_functions || { pause_return; continue; }
                 module_xray_operations_menu
                 ;;
             3) module_update_manager_script; pause_return ;;
             4) cleanup_xray_branch_fully; pause_return ;;
+            5) module_network_tuning_menu ;;
             0) return ;;
             *) error "无效输入"; sleep 1 ;;
         esac
     done
 }
 
-enter_pfw_function_menu() {
-    require_pfw_installed_for_functions || return 1
-    if [[ ! -x /usr/local/bin/pfw ]]; then
-        error "PFW 命令不存在或不可执行，请先重新部署 PFW 分支。"
-        return 1
-    fi
-    /usr/local/bin/pfw
-}
-
-module_pfw_branch_menu() {
-    while true; do
-        clear
-        echo -e "${CYAN}=================================================${PLAIN}"
-        echo -e "${CYAN}                  PFW 分支                       ${PLAIN}"
-        echo -e "${CYAN}=================================================${PLAIN}"
-        echo -e "  分支状态: $(pfw_branch_status_text)"
-        echo "-------------------------------------------------"
-        echo -e "  ${GREEN}1.${PLAIN} 部署广州版 (规则+账本+定时同步)"
-        echo -e "  ${GREEN}2.${PLAIN} 部署香港版 Lite (仅规则管理)"
-        echo -e "  ${GREEN}3.${PLAIN} 进入 PFW 功能菜单"
-        echo -e "  ${RED}4.${PLAIN} 一键彻底清理 PFW 分支"
-        echo -e "  ${CYAN}0.${PLAIN} 返回主菜单"
-        echo -e "${CYAN}=================================================${PLAIN}"
-        read -rp "请输入选项 [0-4]: " c
-        case "$c" in
-            1) deploy_pfw_gz; pause_return ;;
-            2) deploy_pfw_hk; pause_return ;;
-            3) enter_pfw_function_menu; pause_return ;;
-            4) cleanup_pfw_branch_fully; pause_return ;;
-            0) return ;;
-            *) error "无效输入"; sleep 1 ;;
-        esac
-    done
-}
-
-show_main_menu() {
-    clear
-    echo -e "${CYAN}=================================================${PLAIN}"
-    echo -e "${CYAN}            网络工具总控菜单                    ${PLAIN}"
-    echo -e "${CYAN}=================================================${PLAIN}"
-    echo -e "  Xray 分支状态: $(xray_branch_status_text)"
-    echo -e "  PFW  分支状态: $(pfw_branch_status_text)"
-    echo "-------------------------------------------------"
-    echo -e "  ${GREEN}1.${PLAIN} 进入 Xray 分支"
-    echo -e "  ${GREEN}2.${PLAIN} 进入 PFW 分支"
-    echo -e "  ${MAGENTA}3.${PLAIN} 网络优化 (开启 FQ / BBR)"
-    echo -e "  ${YELLOW}4.${PLAIN} 安装/修复 frank 一级命令"
-    echo -e "  ${YELLOW}5.${PLAIN} 手动更新管理脚本"
-    echo -e "  ${RED}6.${PLAIN} 一键彻底清理 Xray 分支"
-    echo -e "  ${RED}7.${PLAIN} 一键彻底清理 PFW 分支"
-    echo -e "  ${CYAN}0.${PLAIN} 退出脚本"
-    echo -e "${CYAN}=================================================${PLAIN}"
-}
-
-# --- 入口 ---
+# --- 入口：只有 Xray，不再包含其他工具的安装或清理 ---
 main() {
-    pre_check
-    local entry_name
-    entry_name="$(basename "$0")"
-
-    if [[ "$entry_name" == "xray-m" ]]; then
-        module_xray_branch_menu
-        exit 0
-    fi
-
-    while true; do
-        show_main_menu
-        read -rp "请输入选项 [0-7]: " top_choice
-        case "$top_choice" in
-            1) module_xray_branch_menu ;;
-            2) module_pfw_branch_menu ;;
-            3) module_network_tuning_menu ;;
-            4) install_frank_manager_command; pause_return ;;
-            5) module_update_manager_script; pause_return ;;
-            6) cleanup_xray_branch_fully; pause_return ;;
-            7) cleanup_pfw_branch_fully; pause_return ;;
-            0) echo -e "${GREEN}再见！${PLAIN}"; exit 0 ;;
-            *) error "无效输入"; sleep 1 ;;
-        esac
-    done
+    pre_check || return 1
+    case "${1:-}" in
+        --install) install_xray_manager_command ;;
+        "") module_xray_branch_menu ;;
+        *) error "用法: xray-m [--install]"; return 2 ;;
+    esac
 }
 
 if [[ "${BASH_SOURCE[0]}" == "$0" ]]; then
