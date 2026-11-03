@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import argparse
+import concurrent.futures
 import contextlib
 import dataclasses
 import datetime as dt
@@ -22,7 +23,7 @@ from pathlib import Path
 from typing import Iterable, Iterator, Mapping, Sequence
 
 
-VERSION = "2.1.1"
+VERSION = "2.2.0"
 TABLE_FAMILY = "ip"
 TABLE_NAME = "pfwd_nat"
 PROTOCOLS = ("both", "tcp", "udp")
@@ -34,6 +35,10 @@ HOST_RE = re.compile(
 
 
 class PfwdError(RuntimeError):
+    pass
+
+
+class PfwdBusyError(PfwdError):
     pass
 
 
@@ -641,7 +646,7 @@ def exclusive_lock(config: Config) -> Iterator[None]:
         except BlockingIOError as exc:
             handle.seek(0)
             owner = handle.read(512).strip() or "持锁信息暂不可用"
-            raise PfwdError(
+            raise PfwdBusyError(
                 f"另一个 pfw 正在提交或创建快照（{owner}）；请稍后重试。"
                 "若为旧版闲置菜单，请在对应终端退出菜单；不要删除锁文件。"
             ) from exc
@@ -703,6 +708,7 @@ def _commit_rules_locked(
     *,
     require_live_sync: bool = True,
     force_apply: bool = False,
+    resolved_targets: Mapping[str, str] | None = None,
 ) -> Path:
     require_root()
     validate_rules(new_rules)
@@ -717,7 +723,22 @@ def _commit_rules_locked(
         raise PfwdError("没有任何实际变化")
     old_runtime_targets = old_pinned_targets or resolve_rule_targets(old_rules)
     old_runtime_nft = generate_nft(old_rules, old_runtime_targets)
-    new_resolved_targets = resolve_rule_targets(new_rules)
+    new_resolved_targets = (
+        resolve_rule_targets(new_rules) if resolved_targets is None else dict(resolved_targets)
+    )
+    if set(new_resolved_targets) != {r.target for r in new_rules}:
+        raise PfwdError("提交解析映射与目标集合不匹配")
+    for target, value in new_resolved_targets.items():
+        try:
+            ipaddress.IPv4Address(value)
+        except ipaddress.AddressValueError as exc:
+            raise PfwdError(f"提交解析映射不是 IPv4：{target}") from exc
+        try:
+            literal = str(ipaddress.IPv4Address(target))
+        except ipaddress.AddressValueError:
+            continue
+        if literal != value:
+            raise PfwdError(f"不允许改写固定 IPv4 目标：{target}")
     new_resolved_bytes = serialize_resolved_targets(new_rules, new_resolved_targets)
     new_nft_bytes = generate_nft(new_rules, new_resolved_targets).encode("utf-8")
     validate_runtime_transaction(config, new_nft_bytes.decode("utf-8"))
@@ -1201,6 +1222,151 @@ def status_report(config: Config) -> bool:
     return ok
 
 
+def resolve_ipv4_bounded(target: str) -> set[str]:
+    """Bound libc resolver time in a child, outside the mutation lock."""
+    code = (
+        "import json,socket,sys; "
+        "print(json.dumps(sorted({x[4][0] for x in socket.getaddrinfo("
+        "sys.argv[1],None,family=socket.AF_INET,type=socket.SOCK_STREAM)})))"
+    )
+    try:
+        result = subprocess.run(
+            [sys.executable, "-c", code, validate_target(target)],
+            capture_output=True, text=True, timeout=8, check=True,
+        )
+        values = json.loads(result.stdout)
+        addresses = {str(ipaddress.IPv4Address(value)) for value in values}
+        if not addresses:
+            raise ValueError("没有 A 记录")
+        return addresses
+    except (subprocess.SubprocessError, OSError, ValueError, TypeError) as exc:
+        raise PfwdError(f"DNS 刷新失败：{target}（{type(exc).__name__}），保留旧 IP") from exc
+
+
+def refresh_dns(config: Config, *, dry_run: bool = False) -> None:
+    require_root()
+    # A coherent short snapshot first; never hold the lock during DNS requests.
+    try:
+        with exclusive_lock(config):
+            rules, source_bytes = load_rules(config)
+            pins = load_resolved_targets(config, rules)
+            if pins is None:
+                raise PfwdError("缺少解析映射，请先使用 pfw apply 迁移旧格式")
+            mapping_bytes = config.resolved_path.read_bytes()
+            nft_bytes = config.nft_path.read_bytes()
+            if nft_bytes != generate_nft(rules, pins).encode():
+                raise PfwdError("持久化文件不一致，自动刷新已停止；请先修复规则状态")
+    except PfwdBusyError:
+        print("DNS 刷新跳过：另一个写入事务正在执行，下次重试。")
+        return
+    domains = []
+    for target in pins:
+        try:
+            ipaddress.IPv4Address(target)
+        except ipaddress.AddressValueError:
+            domains.append(target)
+    updated = dict(pins)
+    changes = []
+    with concurrent.futures.ThreadPoolExecutor(max_workers=4) as pool:
+        jobs = {target: pool.submit(resolve_ipv4_bounded, target) for target in sorted(domains)}
+        for target, job in jobs.items():
+            try:
+                answers = job.result()
+            except PfwdError as exc:
+                print(f"⚠️ {exc}", file=sys.stderr)
+                continue
+            if pins[target] in answers:
+                continue  # Keep the current answer across round-robin ordering changes.
+            updated[target] = min(answers, key=lambda ip: int(ipaddress.IPv4Address(ip)))
+            ids = ",".join(str(r.rule_id) for r in rules if r.target == target)
+            changes.append(f"{target}: {pins[target]} -> {updated[target]}（ID {ids}）")
+    if not changes:
+        print(f"DNS 刷新：检查 {len(domains)} 个域名，无需变更。")
+        return
+    print("\n".join(changes))
+    if dry_run:
+        print("仅预览，未修改配置或实时规则。")
+        return
+    try:
+        with exclusive_lock(config):
+            # An edit or another refresher may have committed during DNS lookup.
+            if (config.rules_path.read_bytes() != source_bytes
+                    or config.resolved_path.read_bytes() != mapping_bytes
+                    or config.nft_path.read_bytes() != nft_bytes):
+                print("DNS 刷新跳过：解析期间配置已变化，下次读取新配置重试。")
+                return
+            backup = _commit_rules_locked(
+                config, rules, source_bytes, rules, "automatic DNS refresh: " + "; ".join(changes),
+                force_apply=True, resolved_targets=updated,
+            )
+            print(f"✅ DNS 刷新已提交；备份：{backup}")
+    except PfwdBusyError:
+        print("DNS 刷新跳过：另一个写入事务正在执行，下次重试。")
+
+
+DNS_SERVICE = """# Managed by pfwd dns-auto
+[Unit]
+Description=Refresh PFW domain targets safely
+Wants=network-online.target
+After=network-online.target nftables.service
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/bin/pfwd refresh-dns
+# DNS subprocesses are bounded; do not kill a firewall transaction mid-rollback.
+TimeoutStartSec=0
+UMask=0077
+Nice=10
+NoNewPrivileges=true
+PrivateTmp=true
+"""
+
+DNS_TIMER = """# Managed by pfwd dns-auto
+[Unit]
+Description=Check PFW domain targets every minute
+
+[Timer]
+OnBootSec=30s
+OnUnitInactiveSec=60s
+AccuracySec=1s
+Unit=pfwd-dns-refresh.service
+
+[Install]
+WantedBy=timers.target
+"""
+
+
+def dns_auto(action: str) -> None:
+    require_root()
+    def systemctl(*args: str) -> None:
+        result = run_command(("systemctl", *args))
+        if result.stdout.strip():
+            print(result.stdout.strip())
+        if result.returncode:
+            raise PfwdError(result.stderr.strip() or f"systemctl {' '.join(args)} 失败")
+    if action == "status":
+        systemctl("list-timers", "--all", "--no-pager", "pfwd-dns-refresh.timer")
+        return
+    if action == "disable":
+        systemctl("disable", "--now", "pfwd-dns-refresh.timer")
+        print("已关闭自动 DNS 刷新；已在执行的事务会安全完成。")
+        return
+    if not Path("/run/systemd/system").is_dir():
+        raise PfwdError("自动刷新定时器需要 systemd")
+    paths = {
+        Path("/etc/systemd/system/pfwd-dns-refresh.service"): DNS_SERVICE,
+        Path("/etc/systemd/system/pfwd-dns-refresh.timer"): DNS_TIMER,
+    }
+    for path in paths:
+        if path.exists() and not path.read_text().startswith("# Managed by pfwd dns-auto\n"):
+            raise PfwdError(f"已有非本工具创建的配置，拒绝覆盖：{path}")
+    for path, content in paths.items():
+        atomic_write(path, content.encode(), 0o644)
+    systemctl("daemon-reload")
+    systemctl("enable", "--now", "pfwd-dns-refresh.timer")
+    print("已启用自动 DNS 刷新：每次检查结束后 60 秒再次运行，开机自动启用。")
+
+
 def safe_apply_current(config: Config) -> None:
     rules, source_bytes = load_rules(config)
     print_rules(rules)
@@ -1403,6 +1569,7 @@ def interactive_menu(config: Config) -> None:
         print("7) 安全重新应用当前规则")
         print("8) 查看 nft 实时规则")
         print("9) 备份与恢复")
+        print("10) 域名 IP 自动刷新")
         print("0) 退出")
         choice = input("选择：").strip()
         try:
@@ -1425,6 +1592,13 @@ def interactive_menu(config: Config) -> None:
                 live_view(config)
             elif choice == "9":
                 backup_restore_interactive(config)
+            elif choice == "10":
+                print("1) 立即刷新  2) 仅预览  3) 启用每分钟刷新  4) 关闭自动刷新  5) 查看定时器")
+                action = input("选择（其他输入返回）：").strip()
+                if action in {"1", "2"}:
+                    refresh_dns(config, dry_run=action == "2")
+                elif action in {"3", "4", "5"}:
+                    dns_auto({"3": "enable", "4": "disable", "5": "status"}[action])
             elif choice == "0":
                 return
             else:
@@ -1451,6 +1625,10 @@ def build_parser() -> argparse.ArgumentParser:
     sub.add_parser("apply", help="安全重新应用当前规则")
     sub.add_parser("backup", help="创建完整快照")
     sub.add_parser("restore", help="交互式恢复历史快照")
+    refresh = sub.add_parser("refresh-dns", help="刷新域名 IP；失败保留旧地址，无变化不写入")
+    refresh.add_argument("--dry-run", action="store_true", help="仅预览 DNS 变化")
+    auto = sub.add_parser("dns-auto", help="配置每分钟自动 DNS 刷新（systemd）")
+    auto.add_argument("action", choices=("enable", "disable", "status"))
 
     replace = sub.add_parser(
         "replace-target", help="按旧目标精确批量替换；默认仅预览"
@@ -1485,6 +1663,12 @@ def main(argv: Sequence[str] | None = None) -> int:
     config = Config.from_env()
     command = args.command or "menu"
     try:
+        if command == "refresh-dns":
+            refresh_dns(config, dry_run=args.dry_run)
+            return 0
+        if command == "dns-auto":
+            dns_auto(args.action)
+            return 0
         if command == "list":
             rules, _ = load_rules(config)
             print_rules(rules)

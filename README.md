@@ -7,7 +7,7 @@
 | `xray-m` | Xray 代理节点、分流、Geo 数据、服务管理 | `/usr/local/sbin/xray-m`，入口 `/usr/local/bin/xray-m` |
 | `pfw` | nftables TCP/UDP 端口转发 | `/usr/local/bin/pfwd`，入口 `/usr/local/bin/pfw` |
 
-Xray 脚本已移除所有 PFW 部署和清理代码。PFW 采用实际服务器取回、SHA256 一致的 **pfwd 2.1.1 安全事务版**，不再提供旧广州版/香港 Lite 安装器。公开仓库仅包含程序，不包含服务器的转发规则、IP 清单或凭据。
+Xray 脚本已移除所有 PFW 部署和清理代码。PFW **2.2.0 安全事务版**基于实际服务器的 2.1.1，新增域名 IP 自动刷新，保留菜单不占锁和完整事务回滚。不再提供旧广州版/香港 Lite 安装器。公开仓库仅包含程序，不包含服务器的转发规则、IP 清单或凭据。
 
 ## 1. 独立安装 / 更新 Xray 管理器
 
@@ -47,7 +47,7 @@ apk add --no-cache bash curl ca-certificates jq openssl unzip iproute2 coreutils
 sudo bash -c 'set -e; apt-get update && apt-get install -y python3 nftables curl ca-certificates; t=$(mktemp); trap "rm -f -- $t" EXIT; curl -fsSL -H "Cache-Control: no-cache" "https://raw.githubusercontent.com/FranklinByte/xray-manager/main/install-pfw.py" -o "$t"; python3 "$t"; pfw'
 ```
 
-日常运行 `pfw`；更新时重跑这条 PFW 命令。没有自动更新任务，也不依赖 `frank` 或 Xray。
+日常运行 `pfw`；更新时重跑这条 PFW 命令。没有自动更新程序的任务，也不依赖 `frank` 或 Xray；域名 IP 自动刷新可按下文独立启用。
 
 - **首次安装**：创建空转发规则、开启 IPv4 转发、为 nftables 增加开机 include 并启用服务。只应用 `ip pfwd_nat` 表；不执行全局 `flush ruleset`，不重启/重载共享 nftables 服务，也不覆盖原 `/etc/nftables.conf` 内容。
 - **已有安全事务版**：校验规则、解析映射、持久化 nft 文件及实时表一致后，只更新程序。保留规则、解析结果、开机配置和实时转发，不重新解析域名或重新应用规则。
@@ -65,6 +65,26 @@ pfw status    # 检查源文件、解析映射、持久化文件及实时表
 pfw backup    # 备份规则和相关状态
 pfw apply     # 明确输入 APPLY 后重新解析并原子应用当前规则
 ```
+
+## 域名 IP 自动刷新（2.2.0）
+
+安装新版后执行以下命令，或在 `pfw` 菜单选择 `10`：
+
+```bash
+sudo pfw dns-auto enable       # 启用并设置开机启动
+sudo pfw dns-auto status       # 查看上次/下次运行时间
+sudo pfw refresh-dns --dry-run # 仅预览当前 DNS 变化
+sudo pfw refresh-dns           # 立即刷新
+sudo pfw dns-auto disable      # 关闭定时器，不中断正在提交的事务
+sudo journalctl -u pfwd-dns-refresh.service -n 30 --no-pager
+```
+
+- `pfwd-dns-refresh.timer` 在开机 30 秒后启动检查，每轮结束 60 秒后再次检查全部域名目标；安装新版程序本身不会擅自启用定时器。已启用的定时器在后续程序更新时继续使用同一路径的新程序。
+- 查询使用系统 DNS 缓存与解析器，发现变化的速度仍受 DNS TTL 影响。每个域名查询最多 8 秒，最多并行 4 个，查询期间不占写入锁。
+- 当前 IP 仍在 A 记录集合中时保持不变，避免多 IP 轮询引起反复切换。解析失败保留旧 IP并写入日志；其他域名仍可独立更新。不会以 ping/TCP 探测作为更新前提，以兼容 UDP-only 规则。
+- 只有 IP 变化才创建备份并提交，更新 TCP/UDP DNAT/MASQUERADE、持久化 nft 和解析映射；保留规则源、固定 IP 目标。正常无变化不写入，也不产生新备份。
+- 与人工修改共用事务锁；解析期间配置发生变化或锁被占用则跳过本轮。配置不一致时停止并报错，不擅自猜测或覆盖规则。
+- 使用现有 nft 原子事务和失败回滚，只更新 `ip pfwd_nat` 表；不重启 Xray、不重载整个防火墙、不清理 conntrack。已有连接可能仍使用旧 NAT 映射直到结束/超时；新连接使用新地址。备份仍保留在 `/var/backups/pfwd`，需关注长期磁盘用量。
 
 ## 旧 frank 用户迁移
 
@@ -114,6 +134,9 @@ bash tests/core-install.sh
 bash tests/manager-install.sh
 python3 tests/test_pfw_lock.py
 sudo unshare -n python3 tests/test_pfw_install.py
+sudo unshare -n python3 tests/test_pfw_dns.py
 ```
 
 不要绕过网络命名空间保护直接运行 nftables 安装测试。
+
+DNS 刷新另有 10 个回归场景：真实 nft 更新、无变化/多 A 记录、单个/全部域名解析失败、并发编辑、锁占用、预览、配置不一致、解析超时及应用后失败回滚。
