@@ -18,7 +18,7 @@ import tempfile
 import urllib.request
 
 SOURCE_URL = 'https://raw.githubusercontent.com/FranklinByte/xray-manager/main/pfwd.py'
-SOURCE_SHA256 = 'ebaa385c05745bbf3cce9815b482a10f0111ea29cdaf74f7389cad573d23f7a9'
+SOURCE_SHA256 = '871cc9ab79f1a451c8a2289a3820cd3547e096403436c4f52f6c21cfc4f2095d'
 WRAPPER = b'#!/usr/bin/env bash\nset -euo pipefail\nexec /usr/local/bin/pfwd "$@"\n'
 
 

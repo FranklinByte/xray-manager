@@ -7,7 +7,7 @@
 | `xray-m` | Xray 代理节点、分流、Geo 数据、服务管理 | `/usr/local/sbin/xray-m`，入口 `/usr/local/bin/xray-m` |
 | `pfw` | nftables TCP/UDP 端口转发 | `/usr/local/bin/pfwd`，入口 `/usr/local/bin/pfw` |
 
-Xray 脚本已移除所有 PFW 部署和清理代码。PFW **2.2.0 安全事务版**基于实际服务器的 2.1.1，新增域名 IP 自动刷新，保留菜单不占锁和完整事务回滚。不再提供旧广州版/香港 Lite 安装器。公开仓库仅包含程序，不包含服务器的转发规则、IP 清单或凭据。
+Xray 脚本已移除所有 PFW 部署和清理代码。PFW **2.2.1 安全事务版**基于实际服务器的 2.1.1，支持域名 IP 自动刷新、独立 DNS 地址和刷新间隔，保留菜单不占锁和完整事务回滚。不再提供旧广州版/香港 Lite 安装器。公开仓库仅包含程序，不包含服务器的转发规则、IP 清单或凭据。
 
 ## 1. 独立安装 / 更新 Xray 管理器
 
@@ -86,6 +86,22 @@ sudo journalctl -u pfwd-dns-refresh.service -n 30 --no-pager
 - 与人工修改共用事务锁；解析期间配置发生变化或锁被占用则跳过本轮。配置不一致时停止并报错，不擅自猜测或覆盖规则。
 - 使用现有 nft 原子事务和失败回滚，只更新 `ip pfwd_nat` 表；不重启 Xray、不重载整个防火墙、不清理 conntrack。已有连接可能仍使用旧 NAT 映射直到结束/超时；新连接使用新地址。备份仍保留在 `/var/backups/pfwd`，需关注长期磁盘用量。
 
+### 指定明文 DNS 与 30 秒间隔（2.2.1）
+
+默认仍使用系统 DNS 和 60 秒。可以只为 PFW 指定公共 DNS，不修改系统 DNS：
+
+```bash
+sudo apt-get install -y dnsutils
+sudo install -d -m 755 /etc/pfwd
+printf '%s\n' '{"server":"1.1.1.1","interval_seconds":30}' | sudo tee /etc/pfwd/dns.json >/dev/null
+sudo pfw refresh-dns --dry-run
+sudo pfw dns-auto enable
+```
+
+`/etc/pfwd/dns.json` 配置供自动刷新、手动应用和状态中的域名查询共用。`server` 支持 `system` 或一个 IPv4 DNS 服务器；`interval_seconds` 支持 10–86400 的整数，修改后执行 `pfw dns-auto enable` 更新并重新启动定时器。
+
+显式 DNS 通过 `dig` 直接向指定 IP 的 53 端口发送明文 A 查询，支持 CNAME 和 UDP 截断后的 TCP 重试；不读取个人 `.digrc`，不回退系统 DNS。仍保留服务商侧 DNS 缓存。PFW 更新安装器不会覆盖 `dns.json`；现有实例需主动配置，新装不会自动切换。
+
 ## 旧 frank 用户迁移
 
 GitHub 发布不会自动改变已经安装的服务器。分别执行需要的安装命令即可安装/更新独立工具；不需要的工具可以不安装。
@@ -135,6 +151,7 @@ bash tests/manager-install.sh
 python3 tests/test_pfw_lock.py
 sudo unshare -n python3 tests/test_pfw_install.py
 sudo unshare -n python3 tests/test_pfw_dns.py
+python3 tests/test_pfw_resolver.py
 ```
 
 不要绕过网络命名空间保护直接运行 nftables 安装测试。

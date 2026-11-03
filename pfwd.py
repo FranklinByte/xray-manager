@@ -23,7 +23,8 @@ from pathlib import Path
 from typing import Iterable, Iterator, Mapping, Sequence
 
 
-VERSION = "2.2.0"
+VERSION = "2.2.1"
+DNS_CONFIG_PATH = Path(os.environ.get("PFWD_DNS_CONFIG", "/etc/pfwd/dns.json"))
 TABLE_FAMILY = "ip"
 TABLE_NAME = "pfwd_nat"
 PROTOCOLS = ("both", "tcp", "udp")
@@ -387,12 +388,55 @@ def apply_runtime(config: Config, nft_text: str) -> None:
         raise PfwdError(f"nft 原子应用失败：\n{result.stderr.strip()}")
 
 
+def dns_settings() -> tuple[str, int]:
+    if not DNS_CONFIG_PATH.exists():
+        return "system", 60
+    try:
+        settings = json.loads(DNS_CONFIG_PATH.read_text())
+        server = settings.get("server", "system")
+        if server != "system":
+            server = str(ipaddress.IPv4Address(server))
+        interval = settings.get("interval_seconds", 60)
+        if type(interval) is not int or not 10 <= interval <= 86400:
+            raise ValueError("interval_seconds 必须是 10–86400 的整数")
+        return server, interval
+    except (OSError, ValueError, TypeError, AttributeError) as exc:
+        raise PfwdError(f"DNS 配置无效：{DNS_CONFIG_PATH}：{exc}") from exc
+
+
+def resolve_explicit_dns(target: str, server: str) -> set[str]:
+    """Plain DNS to the configured server only; dig handles CNAME and TCP fallback."""
+    try:
+        result = subprocess.run(
+            ["dig", "-r", "@" + server, validate_target(target).rstrip(".") + ".", "A",
+             "+time=2", "+tries=1", "+noall", "+answer", "+comments"],
+            capture_output=True, text=True, timeout=8, check=True,
+        )
+        if not re.search(r"status: NOERROR\b", result.stdout):
+            raise ValueError("DNS 返回错误状态")
+        addresses = set()
+        for line in result.stdout.splitlines():
+            if line.startswith(";"):
+                continue
+            fields = line.split()
+            if len(fields) == 5 and fields[2:4] == ["IN", "A"]:
+                addresses.add(str(ipaddress.IPv4Address(fields[4])))
+        if not addresses:
+            raise ValueError("没有 A 记录")
+        return addresses
+    except (subprocess.SubprocessError, OSError, ValueError) as exc:
+        raise PfwdError(f"DNS {server} 解析失败：{target}（{type(exc).__name__}）；不回退系统 DNS") from exc
+
+
 def resolve_ipv4(target: str) -> set[str]:
     normalized = validate_target(target)
     try:
         return {str(ipaddress.IPv4Address(normalized))}
     except ipaddress.AddressValueError:
         pass
+    server, _ = dns_settings()
+    if server != "system":
+        return resolve_explicit_dns(normalized, server)
     try:
         answers = socket.getaddrinfo(
             normalized, None, family=socket.AF_INET, type=socket.SOCK_STREAM
@@ -1224,6 +1268,9 @@ def status_report(config: Config) -> bool:
 
 def resolve_ipv4_bounded(target: str) -> set[str]:
     """Bound libc resolver time in a child, outside the mutation lock."""
+    server, _ = dns_settings()
+    if server != "system":
+        return resolve_explicit_dns(target, server)
     code = (
         "import json,socket,sys; "
         "print(json.dumps(sorted({x[4][0] for x in socket.getaddrinfo("
@@ -1353,9 +1400,14 @@ def dns_auto(action: str) -> None:
         return
     if not Path("/run/systemd/system").is_dir():
         raise PfwdError("自动刷新定时器需要 systemd")
+    server, interval = dns_settings()
+    if server != "system" and not shutil.which("dig"):
+        raise PfwdError("指定 DNS 服务器需要 dig，请安装 dnsutils")
     paths = {
         Path("/etc/systemd/system/pfwd-dns-refresh.service"): DNS_SERVICE,
-        Path("/etc/systemd/system/pfwd-dns-refresh.timer"): DNS_TIMER,
+        Path("/etc/systemd/system/pfwd-dns-refresh.timer"): DNS_TIMER.replace(
+            "every minute", f"every {interval} seconds"
+        ).replace("OnUnitInactiveSec=60s", f"OnUnitInactiveSec={interval}s"),
     }
     for path in paths:
         if path.exists() and not path.read_text().startswith("# Managed by pfwd dns-auto\n"):
@@ -1364,7 +1416,8 @@ def dns_auto(action: str) -> None:
         atomic_write(path, content.encode(), 0o644)
     systemctl("daemon-reload")
     systemctl("enable", "--now", "pfwd-dns-refresh.timer")
-    print("已启用自动 DNS 刷新：每次检查结束后 60 秒再次运行，开机自动启用。")
+    systemctl("restart", "pfwd-dns-refresh.timer")
+    print(f"已启用自动 DNS 刷新：DNS={server}，每次检查结束后 {interval} 秒再次运行，开机自动启用。")
 
 
 def safe_apply_current(config: Config) -> None:
