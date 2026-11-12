@@ -39,6 +39,26 @@ apk add --no-cache bash curl ca-certificates jq openssl unzip iproute2 coreutils
 
 已是 root 时去掉 `sudo`。日常运行 `xray-m`；菜单 `3` 手动更新管理器，也可以重跑对应安装命令。安装失败会停止，不直接覆盖正在运行的核心或配置。管理脚本安装备份位于 `/var/tmp/xray-manager-before-install.*`，菜单更新备份为脚本旁的 `.bak.*` 文件。
 
+### 禁用当前服务器 IPv6
+
+已安装的机器先用上面对应系统的命令更新管理器，再运行 `xray-m`，选择主菜单 **`6. 禁用本机 IPv6`**，输入 `y` 确认。也可以直接执行：
+
+```bash
+sudo xray-m --disable-ipv6
+```
+
+Alpine 使用 root 登录后执行：
+
+```bash
+xray-m --disable-ipv6
+```
+
+立即禁用本机所有接口的 IPv6，并在 `/etc/sysctl.d/99-xray-disable-ipv6.conf` 设置 `all.disable_ipv6=1`、`default.disable_ipv6=1`，供开机加载及新接口使用。Alpine/OpenRC 会启用 boot runlevel 的 sysctl 服务；使用 ifupdown/ifupdown-ng 的机器还会移除 `/etc/network/interfaces` 及 `interfaces.d` 文件中的 `inet6` 配置段，保留 IPv4 与其他配置，避免开机配置已禁用的 IPv6 地址失败。
+
+修改前的网络文件、原 sysctl 配置与 IPv6 地址/路由记录保存在 `/var/backups/xray-manager/ipv6/disable.*`。操作会中断 IPv6 连接；如果当前 SSH 使用 IPv6，工具会拒绝执行，须先改用 IPv4 登录。不会自动重启网络、SSH 或 Xray。Netplan、NetworkManager 或其他工具若另有强制启用 IPv6 的配置，需同步检查，避免其后续覆盖 sysctl。
+
+安装或更新管理器本身不会自动禁用 IPv6，需要在每台机器主动执行此选项。卸载管理器也不会自动重新开启 IPv6。旧的 `frank` 下载命令请改用本页的 `install-xray.sh` 安装命令，安装后的入口是 `xray-m`。
+
 ## 2. 独立安装 / 更新 PFW
 
 当前独立安装器支持 **Ubuntu 22.04+ / Debian 12+、systemd、Python 3.10+**。其他发行版尚未验收；不要把 Xray 的跨发行版支持理解为 PFW 的支持范围。
@@ -115,7 +135,7 @@ sudo rm -f /usr/local/bin/frank /usr/local/sbin/frank
 
 ## Xray 功能与版本
 
-支持 SS2022、VLESS Reality、VLESS Encryption、多节点、服务端分流、Geo 更新、配置还原、日志、服务管理及手动 FQ/BBR 设置。基于 [RomanovCaesar/Install-Xray-Inbounds](https://github.com/RomanovCaesar/Install-Xray-Inbounds) 重构。
+支持 SS2022、VLESS Reality、VLESS Encryption、多节点、服务端分流、Geo 更新、配置还原、日志、服务管理、手动 FQ/BBR 设置及本机 IPv6 禁用。基于 [RomanovCaesar/Install-Xray-Inbounds](https://github.com/RomanovCaesar/Install-Xray-Inbounds) 重构。
 
 ### Xray 版本策略（Mihomo / Clash Verge）
 
@@ -148,6 +168,8 @@ Xray 核心安装器有 11 个回归场景；管理器另测独立安装、自�
 ```bash
 bash tests/core-install.sh
 bash tests/manager-install.sh
+bash tests/ipv6-disable.sh
+sudo bash tests/ipv6-disable-netns.sh
 python3 tests/test_pfw_lock.py
 sudo unshare -n python3 tests/test_pfw_install.py
 sudo unshare -n python3 tests/test_pfw_dns.py
@@ -155,5 +177,7 @@ python3 tests/test_pfw_resolver.py
 ```
 
 不要绕过网络命名空间保护直接运行 nftables 安装测试。
+
+IPv6 回归包含确认取消、IPv6 SSH 防断连、ifupdown 配置保留、OpenRC 开机启用、重复执行与失败检查；网络测试会自行通过 `unshare -n` 创建独立命名空间，使用真实内核 sysctl 验证 IPv6 地址/路由消失、后续新接口继承禁用及 IPv4 TCP 仍可用。无法创建或验证隔离时立即拒绝，不在宿主网络执行。
 
 DNS 刷新另有 10 个回归场景：真实 nft 更新、无变化/多 A 记录、单个/全部域名解析失败、并发编辑、锁占用、预览、配置不一致、解析超时及应用后失败回滚。

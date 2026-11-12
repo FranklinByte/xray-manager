@@ -23,6 +23,8 @@ readonly GEO_DIR="/usr/local/bin"
 readonly GEO_SHARE_DIR="/usr/local/share/xray"
 readonly ADDRESS_FILE="/root/inbound_address.txt"
 readonly NETWORK_TUNING_CONF="/etc/sysctl.d/99-xray-network-tuning.conf"
+readonly IPV6_DISABLE_CONF="/etc/sysctl.d/99-xray-disable-ipv6.conf"
+readonly IPV6_BACKUP_DIR="/var/backups/xray-manager/ipv6"
 readonly SCRIPT_UPDATE_URL="https://raw.githubusercontent.com/FranklinByte/xray-manager/main/xray_manager.sh"
 
 # --- 全局变量 ---
@@ -1831,7 +1833,113 @@ module_network_tuning_menu() {
 }
 
 # ============================================================
-# 第十四部分：分支化主菜单
+# 第十四部分：本机 IPv6 管理
+# ============================================================
+
+disable_server_ipv6() (
+    local peer peer_port local_ip local_port confirm value file staged backup addresses
+    local network_files=() staged_files=()
+    trap 'rm -f -- "${staged_files[@]}" "${staged:-}"' EXIT
+    read -r peer peer_port local_ip local_port <<< "${SSH_CONNECTION:-}" || true
+    if [[ "${local_ip:-}" == *:* ]]; then
+        error "当前 SSH 连接使用 IPv6。请先通过 IPv4 登录，再禁用 IPv6，避免断开管理连接。"
+        return 1
+    fi
+    if [[ ! -f /proc/sys/net/ipv6/conf/all/disable_ipv6 ]]; then
+        info "当前内核未提供 IPv6，或已从内核启动参数禁用，无需修改。"
+        return 0
+    fi
+    command -v ip >/dev/null 2>&1 && command -v sysctl >/dev/null 2>&1 || {
+        error "需要 ip 与 sysctl 命令，请先安装 iproute2 和 procps。"
+        return 1
+    }
+    echo "================ 禁用本机 IPv6 ================"
+    echo "当前状态 (0=开启，1=禁用):"
+    sysctl net.ipv6.conf.all.disable_ipv6 net.ipv6.conf.default.disable_ipv6 || return 1
+    echo "这会立即移除本机 IPv6 地址/路由，中断 IPv6 连接，并写入开机配置。"
+    echo "IPv4 地址、Xray 节点和端口保持原配置；不会重启网络或 Xray。"
+    read -rp "确认禁用本机 IPv6？[y/N]: " confirm || return 1
+    [[ "$confirm" =~ ^[yY]$ ]] || { info "已取消"; return 0; }
+
+    # ifupdown / ifupdown-ng 在 IPv6 被禁用后不能再配置 inet6 静态地址。
+    # 仅移除 inet6 stanza，保留同文件中的 IPv4、其他网卡及 source 指令。
+    for file in /etc/network/interfaces /etc/network/interfaces.d/*; do
+        [[ -f "$file" ]] || continue
+        grep -Eq '^[[:space:]]*iface[[:space:]]+[^[:space:]]+[[:space:]]+inet6([[:space:]]|$)' "$file" || continue
+        [[ ! -L "$file" ]] || { error "网络配置是符号链接，请先手动检查: $file"; return 1; }
+        network_files+=("$file")
+    done
+    [[ ! -L "$IPV6_DISABLE_CONF" ]] || { error "IPv6 配置是符号链接，请先手动检查。"; return 1; }
+    mkdir -p "$IPV6_BACKUP_DIR" "$(dirname "$IPV6_DISABLE_CONF")" || return 1
+    backup=$(mktemp -d "$IPV6_BACKUP_DIR/disable.XXXXXX") || return 1
+    chmod 700 "$backup" || return 1
+    sysctl -a 2>/dev/null | grep -E '^net\.ipv6\.conf\..+\.disable_ipv6 ' > "$backup/sysctl-before.txt"
+    ip -6 address show > "$backup/addresses-before.txt" || return 1
+    ip -6 route show table all > "$backup/routes-before.txt" || return 1
+    if [[ -e "$IPV6_DISABLE_CONF" ]]; then
+        cp -p "$IPV6_DISABLE_CONF" "$backup/disable-ipv6.conf" || return 1
+    fi
+    # 所有文件先完成备份/生成，再写入；生成失败不修改当前网络配置。
+    for file in "${network_files[@]}"; do
+        mkdir -p "$backup$(dirname "$file")" || return 1
+        cp -p "$file" "$backup$file" || return 1
+        staged=$(mktemp "$(dirname "$file")/.xray-ipv4.XXXXXX") || return 1
+        staged_files+=("$staged")
+        if ! cp -p "$file" "$staged" || ! awk '
+            /^[[:space:]]*iface[[:space:]]/ { skip = ($3 == "inet6") }
+            /^[^[:space:]#]/ && !/^iface[[:space:]]/ { skip = 0 }
+            !skip { print }
+        ' "$file" > "$staged"; then
+            rm -f -- "${staged_files[@]}"
+            error "无法生成 IPv4 网络配置；未禁用 IPv6。备份: $backup"
+            return 1
+        fi
+    done
+    staged=$(mktemp "${IPV6_DISABLE_CONF}.new.XXXXXX") || return 1
+    if ! printf '%s\n' '# Managed by xray-m: disable IPv6 on this server.' \
+        'net.ipv6.conf.all.disable_ipv6 = 1' \
+        'net.ipv6.conf.default.disable_ipv6 = 1' > "$staged" || ! chmod 644 "$staged"; then
+        rm -f -- "$staged" "${staged_files[@]}"
+        return 1
+    fi
+    # Alpine 的 sysctl 服务需要在 boot runlevel 启用，不能依赖 systemd。
+    if [[ "$INIT_SYSTEM" == "openrc" ]] && ! rc-update add sysctl boot; then
+        rm -f -- "$staged" "${staged_files[@]}"
+        error "无法启用开机 sysctl，未禁用 IPv6。"
+        return 1
+    fi
+    local i
+    for i in "${!network_files[@]}"; do
+        if ! mv -f -- "${staged_files[$i]}" "${network_files[$i]}"; then
+            rm -f -- "$staged" "${staged_files[@]}"
+            error "网络配置写入失败，未执行内核修改。恢复资料: $backup"
+            return 1
+        fi
+    done
+    if ! mv -f -- "$staged" "$IPV6_DISABLE_CONF" || ! sysctl -p "$IPV6_DISABLE_CONF"; then
+        error "禁用 IPv6 未完整成功，请检查权限/内核并查看备份: $backup"
+        return 1
+    fi
+    # all=1 应覆盖当前所有接口，default=1 保护后续新建接口。
+    for file in /proc/sys/net/ipv6/conf/*/disable_ipv6; do
+        [[ -f "$file" ]] || continue
+        value=$(cat "$file")
+        if [[ "$value" != 1 ]]; then
+            error "IPv6 状态校验失败: $file=$value；备份: $backup"
+            return 1
+        fi
+    done
+    addresses=$(ip -6 address show) || { error "无法读取 IPv6 地址以验证结果；备份: $backup"; return 1; }
+    if grep -q 'inet6 ' <<< "$addresses"; then
+        error "仍检测到 IPv6 地址，禁用未完整生效；备份: $backup"
+        return 1
+    fi
+    success "本机 IPv6 已禁用，并已写入开机配置。"
+    info "配置: $IPV6_DISABLE_CONF；修改前备份: $backup"
+)
+
+# ============================================================
+# 第十五部分：分支化主菜单
 # ============================================================
 
 module_xray_operations_menu() {
@@ -1886,9 +1994,10 @@ module_xray_branch_menu() {
         echo -e "  ${YELLOW}3.${PLAIN} 手动更新当前脚本"
         echo -e "  ${RED}4.${PLAIN} 一键彻底清理 Xray 分支"
         echo -e "  ${MAGENTA}5.${PLAIN} 网络优化 (FQ / BBR)"
+        echo -e "  ${YELLOW}6.${PLAIN} 禁用本机 IPv6 (立即生效 + 开机保留)"
         echo -e "  ${CYAN}0.${PLAIN} 退出"
         echo -e "${CYAN}=================================================${PLAIN}"
-        read -rp "请输入选项 [0-5]: " c || return
+        read -rp "请输入选项 [0-6]: " c || return
         case "$c" in
             1) install_xray_manager_command; pause_return ;;
             2)
@@ -1897,6 +2006,7 @@ module_xray_branch_menu() {
             3) module_update_manager_script; pause_return ;;
             4) cleanup_xray_branch_fully; pause_return ;;
             5) module_network_tuning_menu ;;
+            6) disable_server_ipv6; pause_return ;;
             0) return ;;
             *) error "无效输入"; sleep 1 ;;
         esac
@@ -1908,8 +2018,9 @@ main() {
     pre_check || return 1
     case "${1:-}" in
         --install) install_xray_manager_command ;;
+        --disable-ipv6) disable_server_ipv6 ;;
         "") module_xray_branch_menu ;;
-        *) error "用法: xray-m [--install]"; return 2 ;;
+        *) error "用法: xray-m [--install|--disable-ipv6]"; return 2 ;;
     esac
 }
 
